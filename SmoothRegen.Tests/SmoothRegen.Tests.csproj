@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AssemblyName>SmoothRegen.Tests</AssemblyName>
+    <RootNamespace>SmoothRegen.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Test the real buffer, not a copy. It has no Unity dependency on purpose. -->
+    <Compile Include="..\RegenBuffer.cs" Link="RegenBuffer.cs" />
+  </ItemGroup>
+
+</Project>

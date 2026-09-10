@@ -1,0 +1,9 @@
+{
+  "name": "SmoothRegen",
+  "version_number": "1.0.0",
+  "website_url": "https://github.com/UberMorgott/Valheim-Mod-SmoothRegen",
+  "description": "Pays out food health regeneration continuously instead of one lump every 10 seconds. Same total healing as vanilla, smoother health bar.",
+  "dependencies": [
+    "denikson-BepInExPack_Valheim-5.4.2350"
+  ]
+}
