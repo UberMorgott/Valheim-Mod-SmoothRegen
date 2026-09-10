@@ -89,15 +89,29 @@ design let the buffer accumulate to `2 * GetMaxHealth()` and, once damage opened
 headroom, discharge at `pending / SmoothingWindow` - ~20 hp/s, a hit that heals
 straight back off. That is the opposite of the mod's purpose. `Take` still takes
 no limit, so that cannot come back by accident; instead `RegenBuffer.Add` caps
-pending at **one window's worth of vanilla regen**,
-`amount * max(1, SmoothingWindow / 10)`:
+pending at **one tick**, so the worst case burst is what vanilla itself would
+have handed over at a single tick, and `pending / SmoothingWindow` never exceeds
+vanilla's own average rate of one tick per 10s. The payout rate is bounded by
+construction.
 
-- At the default 10s window the ceiling is exactly one tick, so the worst case
-  burst is what vanilla itself would have handed over at a single tick.
-- A longer window legitimately keeps several ticks in flight, and the formula
-  scales with it rather than clipping healing the player is owed.
-- Either way `pending / SmoothingWindow` never exceeds vanilla's own average
-  rate of one tick per 10s. The payout rate is bounded by construction.
+### Why the window is clamped to the 10s tick period
+
+`SmoothingWindow` accepts 0.5-10 and `RegenBuffer.Add` clamps anything above
+`VanillaTickPeriod` (10) down to it. The buffer is a single merged
+`_pending`/`_rate` pair, so a window longer than the tick period means the next
+tick lands on an undrained one, `_rate` is recomputed over the merged pool, and
+the previous tick's remainder is re-stretched. At 20 hp per tick and a 30s
+window that settles into a permanent ~40 hp backlog with pending pinned near
+`amount * window / 10`, and the promise on the tin - "each tick is paid out over
+`SmoothingWindow` seconds" - stops holding: measured, tick 10 was still 40 hp
+short after 100s.
+
+Clamping instead of tracking per-tick portions is deliberate. A window longer
+than the tick period buys nothing: at exactly 10s the payout is already
+continuous, one tick handed over precisely as the next arrives. Anything longer
+only adds latency and a backlog. Below 10s the knob still does something real -
+pay the tick out faster, then idle until the next one - so the range keeps its
+lower half. Regression test: `LongWindowStillPaysEachTickWithinTheTickPeriod`.
 
 The residual difference from vanilla is one tick held in flight, delivered late
 rather than forfeited - which is the smoothing lag the mod exists to trade for,
@@ -151,6 +165,26 @@ folded into that one number, whatever it came from.
   from `SE_Update`, outside our flag window, so they are untouched.
 - EquipmentAndQuickSlots postfixes `Player.OnDeath` at priority 0, running
   after our buffer clear. The two are independent, order does not matter.
+
+### Known limitation: the in-tick flag is scoped to the method, not to the call
+
+`State.InFoodTick` is set for the whole of `Player.UpdateFood`, so the `Heal`
+prefix captures *any* heal on the local player that happens inside that call -
+not only vanilla's own. Vanilla's `UpdateFood` contains exactly one `Heal`
+(confirmed in the 1.0.7 decompile), so today nothing else is caught. The
+exposure is another mod healing the local player from inside the same call:
+from its own `UpdateFood` prefix/postfix, or from a postfix on something
+`UpdateFood` invokes (`SetMaxHealth`, `SEMan.ModifyHealthRegen`, `Message`,
+`ShowTutorial`). Such a heal would be smoothed rather than instant. It would
+still be delivered in full - the buffer never changes the total - so the worst
+case is a heal arriving late, not one going missing.
+
+This is left unfixed on purpose. Narrowing the window to vanilla's single `Heal`
+would mean matching the call site, i.e. a transpiler on `UpdateFood`, which is
+exactly what this design refuses to do (EpicLoot transpiles the same method).
+Distinguishing the caller from inside the prefix would need a stack walk every
+tick. Both are worse than the limitation. No plugin in the 2026-09-10 conflict
+audit heals from inside `UpdateFood`; recheck this if that changes.
 
 ## Verification
 

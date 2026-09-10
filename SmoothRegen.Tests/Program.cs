@@ -23,6 +23,7 @@ namespace SmoothRegen.Tests
             FullHealthDoesNotBankABurst();
             DisableThenReenablePaysNothingStale();
             FullHealthThenDamageStillPaysTheWholeTick();
+            LongWindowStillPaysEachTickWithinTheTickPeriod();
 
             if (_failures == 0)
             {
@@ -71,9 +72,8 @@ namespace SmoothRegen.Tests
             Near("nothing more to give", buffer.Take(1f), 0f);
         }
 
-        // A window longer than vanilla's 10s tick period keeps several ticks in flight at once.
-        // The tick landing on top of an undrained one must not strand the remainder, and must
-        // stay under the cap - one window's worth of regen is 2 ticks here, and 15 is held.
+        // A window is clamped to the 10s tick period, so a tick can only land on an undrained one
+        // when payouts were held back. The remainder must not be stranded, and the total must survive.
         private static void OverlappingTicksKeepTotal()
         {
             var buffer = new RegenBuffer();
@@ -138,10 +138,9 @@ namespace SmoothRegen.Tests
             }
         }
 
-        // Ticks banked while at full health must not grow without bound. The ceiling is one
-        // window's worth of vanilla regen: one tick for a window at or below vanilla's 10s
-        // period, proportionally more for a longer window (which legitimately holds several
-        // ticks in flight). Either way pending / window <= vanilla's own average rate.
+        // Ticks banked while at full health must not grow without bound. The ceiling is one vanilla
+        // tick, whatever the configured window: the window is clamped to the 10s tick period, so
+        // pending / window never exceeds vanilla's own average rate.
         private static void CapLimitsWhatIsBanked()
         {
             var short10 = new RegenBuffer();
@@ -153,7 +152,7 @@ namespace SmoothRegen.Tests
             var long30 = new RegenBuffer();
             for (var i = 0; i < 20; i++) long30.Add(20f, 30f);
 
-            Near("capped at three ticks for a 30s window", long30.Pending, 60f);
+            Near("still one tick for a 30s window", long30.Pending, 20f);
             Near("still vanilla's rate", DrainSeconds(long30, seconds: 10f, dt: 1f / 60f), 20f);
         }
 
@@ -230,6 +229,39 @@ namespace SmoothRegen.Tests
             // ...and the tick the player was owed must arrive in full, exactly like vanilla.
             var total = firstSecond + DrainSeconds(buffer, seconds: window, dt: dt);
             Near("whole tick delivered after topping off", total, tick);
+        }
+
+        // A configured window longer than vanilla's 10s tick period used to merge every tick into
+        // one pool and re-stretch the leftovers, banking ~amount * window / 10 hp and delaying each
+        // tick far past the window it was promised in. Add now clamps the window to the tick period,
+        // so ticks never overlap: at most one tick is ever in flight and each one is fully paid
+        // before the next arrives.
+        private static void LongWindowStillPaysEachTickWithinTheTickPeriod()
+        {
+            const float dt = 1f / 50f;
+            const float tick = 20f;
+            const float window = 30f;   // user-raised, three times the vanilla tick period
+            var buffer = new RegenBuffer();
+            var paid = 0f;
+
+            for (var n = 1; n <= 10; n++)
+            {
+                buffer.Add(tick, window);
+
+                if (buffer.Pending > tick + 0.01f)
+                    Fail($"tick {n}: banked {buffer.Pending} hp with a {window}s window, " +
+                         $"expected at most one {tick} hp tick in flight");
+
+                paid += DrainSeconds(buffer, seconds: RegenBuffer.VanillaTickPeriod, dt: dt);
+
+                // Deadline: tick n must be fully delivered before tick n+1 arrives.
+                if (paid < n * tick - 0.01f)
+                    Fail($"tick {n}: only {paid} hp delivered after {n * RegenBuffer.VanillaTickPeriod}s, " +
+                         $"expected {n * tick} - a tick missed its payout deadline");
+            }
+
+            Near("ten ticks, nothing lost", paid, 10f * tick, 0.01f);
+            Near("nothing left in flight", buffer.Pending, 0f);
         }
 
         private static float DrainSeconds(RegenBuffer buffer, float seconds, float dt)

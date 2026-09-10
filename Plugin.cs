@@ -26,8 +26,10 @@ namespace SmoothRegen
             Window = Config.Bind("General", "SmoothingWindow", 10f,
                 new ConfigDescription(
                     "Seconds to spread each health tick over. Vanilla ticks every 10 seconds, so 10 " +
-                    "means healing arrives continuously. Total healing per minute is unchanged either way.",
-                    new AcceptableValueRange<float>(0.5f, 30f)));
+                    "(the maximum, and the default) means healing arrives continuously; lower values " +
+                    "pay each tick out faster and then wait. Total healing per minute is unchanged " +
+                    "at any value.",
+                    new AcceptableValueRange<float>(0.5f, RegenBuffer.VanillaTickPeriod)));
 
             InstantFraction = Config.Bind("General", "InstantFraction", 0f,
                 new ConfigDescription(
