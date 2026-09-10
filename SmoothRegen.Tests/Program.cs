@@ -24,6 +24,7 @@ namespace SmoothRegen.Tests
             DisableThenReenablePaysNothingStale();
             FullHealthThenDamageStillPaysTheWholeTick();
             LongWindowStillPaysEachTickWithinTheTickPeriod();
+            ASmallerTickDoesNotTruncateWhatIsAlreadyHeld();
 
             if (_failures == 0)
             {
@@ -262,6 +263,20 @@ namespace SmoothRegen.Tests
 
             Near("ten ticks, nothing lost", paid, 10f * tick, 0.01f);
             Near("nothing left in flight", buffer.Pending, 0f);
+        }
+
+        // The ceiling is "one vanilla tick", not "the last tick". Food burns down, so the next tick
+        // can be smaller than the one still held at full health; clamping to the incoming amount
+        // threw the difference away and healed less than vanilla would have.
+        private static void ASmallerTickDoesNotTruncateWhatIsAlreadyHeld()
+        {
+            var buffer = new RegenBuffer();
+
+            buffer.Add(20f, 10f);   // full stomach, held because the bar is full
+            buffer.Add(5f, 10f);    // food has burned down: the next tick is worth far less
+
+            Near("the held tick survives a smaller one", buffer.Pending, 20f);
+            Near("and it is all paid out", DrainSeconds(buffer, seconds: 15f, dt: 1f / 60f), 20f);
         }
 
         private static float DrainSeconds(RegenBuffer buffer, float seconds, float dt)

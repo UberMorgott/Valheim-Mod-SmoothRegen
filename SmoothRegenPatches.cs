@@ -30,13 +30,16 @@ namespace SmoothRegen
     [HarmonyPatch(typeof(Player), nameof(Player.UpdateFood))]
     internal static class UpdateFoodPatch
     {
-        private static void Prefix(Player __instance)
+        // Save and restore rather than set/clear: a nested UpdateFood would otherwise clear the
+        // flag on the inner exit and leave the outer tick unsmoothed. Vanilla never nests it.
+        private static void Prefix(Player __instance, out bool __state)
         {
+            __state = State.InFoodTick;
             if (__instance == Player.m_localPlayer) State.InFoodTick = true;
         }
 
-        // Finalizer rather than Postfix: the flag must clear even if something throws.
-        private static void Finalizer() => State.InFoodTick = false;
+        // Finalizer rather than Postfix: the flag must be restored even if something throws.
+        private static void Finalizer(bool __state) => State.InFoodTick = __state;
     }
 
     [HarmonyPatch(typeof(Character), nameof(Character.Heal))]
@@ -99,6 +102,21 @@ namespace SmoothRegen
             {
                 State.Paying = false;
             }
+        }
+    }
+
+    /// <summary>
+    /// The buffer is static and outlives the world: returning to the main menu destroys the Player
+    /// but not the plugin, so without this a tick banked by one character is paid to the next one.
+    /// Game.SpawnPlayer is the only path that creates the local player - world entry and respawn
+    /// both route through it - and it calls OnSpawned after SetLocalPlayer.
+    /// </summary>
+    [HarmonyPatch(typeof(Player), nameof(Player.OnSpawned))]
+    internal static class OnSpawnedPatch
+    {
+        private static void Postfix(Player __instance)
+        {
+            if (__instance == Player.m_localPlayer) State.Buffer.Clear();
         }
     }
 

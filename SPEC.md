@@ -50,8 +50,11 @@ Hook `Player.UpdateFood`:
 - Prefix sets a flag marking that we are inside a food tick for the local player.
 - While the flag is set, intercept the single `Character.Heal` call the method
   makes and divert the amount into a buffer instead of applying it.
-- Finalizer clears the flag, so an exception inside the method cannot leave it
-  stuck on.
+- Finalizer restores the flag's previous value (Harmony `__state`), so an
+  exception inside the method cannot leave it stuck on. Save/restore rather
+  than clear-to-false: the prefix only raises the flag for the local player,
+  so an unconditional clear would be asymmetric, and a nested `UpdateFood`
+  would end the outer tick's window early. Vanilla never nests it.
 - A `Player.UpdateStats` postfix drains the buffer, paying out
   `buffered * dt / SmoothingWindow` per frame and healing that amount directly.
 
@@ -89,7 +92,10 @@ design let the buffer accumulate to `2 * GetMaxHealth()` and, once damage opened
 headroom, discharge at `pending / SmoothingWindow` - ~20 hp/s, a hit that heals
 straight back off. That is the opposite of the mod's purpose. `Take` still takes
 no limit, so that cannot come back by accident; instead `RegenBuffer.Add` caps
-pending at **one tick**, so the worst case burst is what vanilla itself would
+pending at **one tick** - specifically `max(incoming, already held)`, because
+food burns down and a later tick can be worth less than the one still owed;
+clamping to the incoming amount alone forfeited the difference and healed less
+than vanilla. Either way the worst case burst is what vanilla itself would
 have handed over at a single tick, and `pending / SmoothingWindow` never exceeds
 vanilla's own average rate of one tick per 10s. The payout rate is bounded by
 construction.
@@ -125,6 +131,27 @@ rate survive untouched, and switching the mod back on minutes later resumes
 paying out a heal earned before it was turned off. The cost is forfeiting at
 most one tick, once, at a moment the player deliberately asked the mod to stop
 - the alternative, healing on after being switched off, is worse.
+
+That cost includes a tick banked in the very same frame. `UpdateFood` runs from
+inside `UpdateStats(dt)`, so the `Heal` prefix banks before our `UpdateStats`
+postfix reads `Enabled` again; if the config flips between those two reads (only
+possible from BepInEx's config-file watcher thread, since nothing else runs
+mid-call) the freshly banked tick is cleared unpaid. Accepted, not fixed:
+tracking it would need extra state for a race whose entire cost is the one tick
+this section already forfeits by design, and once the mod is off that tick
+should not be paid out anyway.
+
+### Clearing the buffer on spawn
+
+The buffer is `static` and lives on the plugin, which survives the trip to the
+main menu; `Plugin.OnDestroy` runs only on plugin unload. Without a clear, up to
+one banked tick earned by one character is paid out to whatever character is
+loaded next. A `Player.OnSpawned` postfix clears it. `Game.SpawnPlayer` is the
+only code path that constructs the local player - both world entry and respawn
+after death reach it through `Game.UpdateRespawn` - and it calls `OnSpawned`
+*after* `SetLocalPlayer`, so the `m_localPlayer` guard holds. The `OnDeath`
+clear stays: the corpse remains the local player until `_RequestRespawn`
+destroys it seconds later, and it has headroom to be paid into.
 
 ### Confirmed facts
 

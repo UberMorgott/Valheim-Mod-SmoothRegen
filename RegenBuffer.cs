@@ -33,12 +33,15 @@ namespace SmoothRegen
             // rather than at the caller keeps the invariant with the arithmetic that relies on it.
             if (window > VanillaTickPeriod) window = VanillaTickPeriod;
 
-            _pending += amount;
-
             // Ceiling is one tick: pending/window then never exceeds vanilla's own average rate,
             // so holding a payout back (no headroom to heal into) can never discharge as a burst -
-            // the worst case is one vanilla tick, spread out.
-            if (_pending > amount) _pending = amount;
+            // the worst case is one vanilla tick, spread out. It is the LARGER of the incoming tick
+            // and what is already held: food burns down, so a later tick can be worth less than the
+            // one still owed, and clamping to the incoming amount would forfeit the difference.
+            var ceiling = Math.Max(amount, _pending);
+
+            _pending += amount;
+            if (_pending > ceiling) _pending = ceiling;
 
             // Re-spread whatever is left, so a tick arriving early does not strand a remainder.
             _rate = _pending / window;
