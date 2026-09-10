@@ -19,6 +19,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The test project lives under this one; its sources and obj\ are not part of the plugin. -->
+    <Compile Remove="SmoothRegen.Tests\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="BepInEx.Core" Version="5.4.21" />
     <PackageReference Include="HarmonyX" Version="2.10.1" />
     <!-- Game fields we need are private; publicize instead of reflecting. -->

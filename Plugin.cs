@@ -29,7 +29,7 @@ namespace SmoothRegen
                     "means healing arrives continuously. Total healing per minute is unchanged either way.",
                     new AcceptableValueRange<float>(0.5f, 30f)));
 
-            InstantFraction = Config.Bind("General", "InstantFraction", 0.25f,
+            InstantFraction = Config.Bind("General", "InstantFraction", 0f,
                 new ConfigDescription(
                     "Share of each health tick applied immediately, at the moment the tick fires. " +
                     "The remaining share is spread over SmoothingWindow. Smoothing always arrives " +

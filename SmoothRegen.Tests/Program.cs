@@ -20,7 +20,7 @@ namespace SmoothRegen.Tests
             ClearDropsPending();
             SplitTickStillTotalsTheOriginal();
             CapLimitsWhatIsBanked();
-            BufferSurvivesFullHealthAndPaysOutAfter();
+            FullHealthDoesNotBankABurst();
 
             if (_failures == 0)
             {
@@ -147,23 +147,29 @@ namespace SmoothRegen.Tests
             Near("pays out only the cap", DrainSeconds(buffer, seconds: 30f, dt: 1f / 60f), cap);
         }
 
-        // Character.Heal drops anything above max health, so a full-health player must not
-        // drain the buffer. It waits, then pays out once there is room again.
-        private static void BufferSurvivesFullHealthAndPaysOutAfter()
+        // Character.RPC_Heal drops anything above max health, so regen earned at full health is
+        // forfeited, not banked. Holding it back instead lets the buffer swell and dump the whole
+        // bank the instant damage opens headroom - a hit that heals straight back off.
+        private static void FullHealthDoesNotBankABurst()
         {
+            const float dt = 1f / 50f;   // Player.UpdateStats(float) runs from FixedUpdate
+            const float tick = 15f;      // one food regen tick
             var buffer = new RegenBuffer();
-            buffer.Add(15f, 10f);
 
-            // 30 seconds at full health: headroom is zero, nothing may leave the buffer.
-            var wasted = 0f;
-            for (var elapsed = 0f; elapsed < 30f; elapsed += 1f / 60f)
-                wasted += buffer.Take(1f / 60f, limit: 0f);
+            // Ten minutes at full health: a tick every 10s, drained every frame into a full bar.
+            for (var frame = 1; frame <= 30000; frame++)
+            {
+                if (frame % 500 == 0) buffer.Add(tick, 10f, cap: 200f);
+                buffer.Take(dt);
+            }
 
-            Near("nothing paid at full health", wasted, 0f);
-            Near("buffer intact", buffer.Pending, 15f);
+            if (buffer.Pending > tick)
+                Fail($"banked {buffer.Pending} hp at full health, more than one {tick} hp tick");
 
-            // Player takes a hit; now it drains as usual.
-            Near("pays out afterwards", DrainSeconds(buffer, seconds: 15f, dt: 1f / 60f), 15f);
+            // Player finally takes a hit: the first second must not dump a bank.
+            var firstSecond = DrainSeconds(buffer, seconds: 1f, dt: dt);
+            if (firstSecond > tick / 10f + 0.1f)
+                Fail($"burst on damage: {firstSecond} hp in the first second, expected <= {tick / 10f}");
         }
 
         private static float DrainSeconds(RegenBuffer buffer, float seconds, float dt)

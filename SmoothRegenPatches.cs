@@ -27,10 +27,9 @@ namespace SmoothRegen
         internal static bool Paying;
 
         /// <summary>
-        /// The buffer survives a spell at full health instead of being thrown away, so it must
-        /// not grow forever. Two times max health is roughly 100 seconds of good food regen -
-        /// enough to cover any normal full-health stretch, small enough that an hour idle
-        /// does not turn into a free instant heal.
+        /// Backstop only: the buffer drains on the clock, so pending never exceeds roughly one
+        /// tick. This bounds it anyway if another mod drives Player.UpdateFood without letting
+        /// Player.UpdateStats(float) run in between.
         /// </summary>
         internal const float PendingCapMultiplier = 2f;
     }
@@ -78,12 +77,15 @@ namespace SmoothRegen
             if (!Plugin.Enabled.Value) return;
             if (__instance != Player.m_localPlayer) return;
 
-            // Character.RPC_Heal clamps to max health and silently drops the excess, so only
-            // draw what actually fits. At full health headroom is zero, the buffer is untouched
-            // and waits for the player to take damage.
-            var headroom = __instance.GetMaxHealth() - __instance.GetHealth();
-            var chunk = State.Buffer.Take(dt, headroom);
+            // Character.RPC_Heal clamps to max health and silently drops the excess, so vanilla
+            // forfeits regen earned at full health. Match that: drain on the clock whatever the
+            // health bar looks like. Holding it back instead banks a burst that dumps the moment
+            // damage opens headroom, which is exactly what this mod exists to prevent.
+            var chunk = State.Buffer.Take(dt);
             if (chunk <= 0f) return;
+
+            // Nothing would land anyway, and Heal() is an RPC when we are not the owner.
+            if (__instance.GetHealth() >= __instance.GetMaxHealth()) return;
 
             State.Paying = true;
             try

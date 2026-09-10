@@ -31,17 +31,16 @@ namespace SmoothRegen
         }
 
         /// <summary>
-        /// Take the share earned by <paramref name="dt"/> seconds, never more than
-        /// <paramref name="limit"/>. Never overdraws. A limit of zero pays nothing and
-        /// leaves the buffer intact - that is how a full-health player keeps their pending heal.
+        /// Take the share earned by <paramref name="dt"/> seconds. Never overdraws.
+        /// Draining is unconditional by design: withholding a payout that cannot land
+        /// (a full health bar) would bank it into a burst instead of forfeiting it.
         /// </summary>
-        public float Take(float dt, float limit = float.PositiveInfinity)
+        public float Take(float dt)
         {
-            if (_pending <= 0f || dt <= 0f || limit <= 0f) return 0f;
+            if (_pending <= 0f || dt <= 0f) return 0f;
 
             var chunk = _rate * dt;
             if (float.IsNaN(chunk) || chunk >= _pending) chunk = _pending;
-            if (chunk > limit) chunk = limit;
 
             _pending -= chunk;
             if (_pending <= 0f)

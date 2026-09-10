@@ -65,26 +65,28 @@ vanilla's instant step, on average by half the window. It cannot be removed:
 the amount is not known before the tick computes it, and forecasting from the
 previous tick yields an identical distribution. So it is managed, not solved.
 
-`InstantFraction` (0.0-1.0, default 0.25) is the knob. The prefix takes
+`InstantFraction` (0.0-1.0, default 0.0 - fully smooth) is the knob. The prefix takes
 `ref float hp`, buffers `hp * (1 - InstantFraction)` and lowers `hp` by that
 same amount, letting the original call through for the remainder. Subtraction
 rather than a second multiply, so instant + smoothed equals the original
 exactly. It stays ONE heal - the prefix skips the original only when the
 instant share is zero. 0.0 is fully smooth with maximum lag, 1.0 is vanilla.
 
-### Retaining the buffer at full health
+### Forfeiting the buffer at full health
 
 `Character.RPC_Heal` clamps to `GetMaxHealth()` and silently discards the
-excess. Paying the buffer out at full health would therefore burn it for
-nothing. Instead `UpdateStatsPatch` passes the remaining headroom
-(`GetMaxHealth() - GetHealth()`) as the take limit, so at full health nothing
-leaves the buffer and a partial overflow near the top is trimmed to what fits.
-The pending heal waits and arrives once the player takes damage.
+excess, so vanilla wastes a tick that lands at full health. SmoothRegen does
+the same: `UpdateStatsPatch` drains the buffer on the clock whatever the health
+bar looks like, and skips only the `Heal` call itself when there is no headroom
+(nothing would land, and `Heal` is an RPC when we are not the owner).
 
-This is a small, deliberate deviation from vanilla: vanilla wastes a tick that
-lands at full health, SmoothRegen keeps it. Pending is capped at
-`2 * GetMaxHealth()` (`State.PendingCapMultiplier`) so an hour idle at full
-health does not bank a free instant heal.
+Retaining it instead - the original design, `Take(dt, headroom)` - was a defect.
+At full health the buffer accumulated up to `2 * GetMaxHealth()` and, once
+damage opened headroom, discharged at `pending / SmoothingWindow`, i.e. ~20 hp/s:
+take a hit, get healed straight back. That is the opposite of the mod's purpose.
+`Take` no longer accepts a limit, so the behaviour cannot come back by accident;
+`State.PendingCapMultiplier` remains only as a backstop against another mod
+driving `Player.UpdateFood` without letting `Player.UpdateStats(float)` run.
 
 ### Confirmed facts
 
