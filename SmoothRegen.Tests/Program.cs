@@ -25,6 +25,7 @@ namespace SmoothRegen.Tests
             FullHealthThenDamageStillPaysTheWholeTick();
             LongWindowStillPaysEachTickWithinTheTickPeriod();
             ASmallerTickDoesNotTruncateWhatIsAlreadyHeld();
+            RandomChurnKeepsEveryInvariant();
 
             if (_failures == 0)
             {
@@ -277,6 +278,113 @@ namespace SmoothRegen.Tests
 
             Near("the held tick survives a smaller one", buffer.Pending, 20f);
             Near("and it is all paid out", DrainSeconds(buffer, seconds: 15f, dt: 1f / 60f), 20f);
+        }
+
+        // Real play churns the inputs: gear swaps, buffs dropping, the puke effect stripping food,
+        // max health moving, EpicLoot affixes coming and going. Every one of those changes the tick
+        // amount, the window, or wipes the buffer, and they can land between two vanilla ticks.
+        // So: a seeded pseudo-random event sequence, and after EVERY step the four invariants -
+        //   1. pending never exceeds one vanilla tick's worth (the Max(amount, pending) ceiling),
+        //   2. a payout never exceeds the rate frozen at the last Add (no burst),
+        //   3. everything paid was added, and nothing added vanishes beyond the documented ceiling,
+        //   4. a tick's amount is frozen at insertion - later events do not change money in flight.
+        // Own LCG, not System.Random, so the sequence is identical on any runtime: a failure prints
+        // the seed and step index and replays exactly.
+        private static void RandomChurnKeepsEveryInvariant()
+        {
+            const uint seed = 20260910u;
+            const int steps = 4000;
+            const float dt = 0.02f;      // FixedUpdate
+            var rng = seed;
+            uint Next(uint bound) { rng = rng * 1664525u + 1013904223u; return (rng >> 8) % bound; }
+
+            var buffer = new RegenBuffer();
+            double added = 0, paid = 0, forfeited = 0;
+            double rate = 0;             // what Add froze; mirrors _pending / clamped window
+
+            for (var step = 0; step < steps; step++)
+            {
+                var before = buffer.Pending;
+                var roll = Next(100);
+
+                if (roll < 20)
+                {
+                    // Add: amounts from zero/negative up to a huge tick, windows from a hair to
+                    // three times the tick period (clamped), including exactly 10s.
+                    var amount = new[] { 0f, -5f, 0.001f, 1f, 7.5f, 15f, 20f, 250f }[Next(8)];
+                    var window = new[] { 10f, 10f, 10f, 0.5f, 3f, 9.99f, 30f }[Next(7)];
+                    buffer.Add(amount, window);
+
+                    if (amount <= 0f)
+                    {
+                        Churn(step, seed, "a non-positive Add changed the buffer",
+                            buffer.Pending, before);
+                        continue;
+                    }
+
+                    added += amount;
+                    var ceiling = Math.Max(amount, before);
+                    if (buffer.Pending > ceiling + 0.001f)
+                        Churn(step, seed, $"pending {buffer.Pending} broke the ceiling {ceiling} " +
+                                          $"(add {amount} onto {before})");
+                    // Nothing truncated except by that ceiling.
+                    Churn(step, seed, $"add {amount} onto {before} lost hp",
+                        buffer.Pending, Math.Min(before + amount, ceiling));
+                    forfeited += Math.Max(0f, before + amount - buffer.Pending);
+
+                    var clamped = Math.Min(window, RegenBuffer.VanillaTickPeriod);
+                    rate = buffer.Pending / clamped;
+                    // No burst: the rate for the amount in flight never beats vanilla's own average
+                    // for a full tick paid over the tick period, given the user's window.
+                    if (rate > ceiling / clamped + 0.001f)
+                        Churn(step, seed, $"rate {rate} exceeds vanilla's {ceiling / clamped}");
+                }
+                else if (roll < 95)
+                {
+                    // Take, including zero/negative dt and frames far longer than the window.
+                    var frame = roll < 90 ? dt : new[] { 0f, -1f, 0.5f, 60f }[Next(4)];
+                    var chunk = buffer.Take(frame);
+
+                    if (chunk < 0f)
+                        Churn(step, seed, $"paid a negative {chunk}");
+                    if (chunk > before + 0.001f)
+                        Churn(step, seed, $"paid {chunk} out of {before} held");
+                    if (frame > 0f && chunk > rate * frame + 0.001f)
+                        Churn(step, seed, $"burst: paid {chunk} in {frame}s, frozen rate allows " +
+                                          $"{rate * frame}");
+                    // Money in flight only moves by what was paid - nothing rewrites it.
+                    Churn(step, seed, "pending drifted from before - paid",
+                        buffer.Pending, before - chunk);
+                    paid += chunk;
+                    if (buffer.Pending <= 0f) rate = 0;
+                }
+                else
+                {
+                    buffer.Clear();
+                    forfeited += before;
+                    rate = 0;
+                    Churn(step, seed, "Clear left something behind", buffer.Pending, 0f);
+                }
+
+                // The books balance at every single step.
+                var drift = added - paid - forfeited - buffer.Pending;
+                if (Math.Abs(drift) > 0.001 * Math.Max(1.0, added))
+                    Churn(step, seed, $"conservation drift {drift}: added {added}, paid {paid}, " +
+                                      $"forfeited {forfeited}, pending {buffer.Pending}");
+            }
+
+            if (paid <= 0 || added <= 0)
+                Fail($"churn seed {seed}: the sequence did nothing (added {added}, paid {paid})");
+        }
+
+        // One-line failure with everything needed to replay: seed, step, and the offending values.
+        private static void Churn(int step, uint seed, string what) =>
+            Fail($"churn seed {seed} step {step}: {what}");
+
+        private static void Churn(int step, uint seed, string what, float actual, float expected)
+        {
+            if (Math.Abs(actual - expected) > 0.001f)
+                Churn(step, seed, $"{what} (got {actual}, expected {expected})");
         }
 
         private static float DrainSeconds(RegenBuffer buffer, float seconds, float dt)
