@@ -25,13 +25,6 @@ namespace SmoothRegen
 
         /// <summary>True while we are paying the buffer back out, to avoid re-capturing our own heal.</summary>
         internal static bool Paying;
-
-        /// <summary>
-        /// Backstop only: the buffer drains on the clock, so pending never exceeds roughly one
-        /// tick. This bounds it anyway if another mod drives Player.UpdateFood without letting
-        /// Player.UpdateStats(float) run in between.
-        /// </summary>
-        internal const float PendingCapMultiplier = 2f;
     }
 
     [HarmonyPatch(typeof(Player), nameof(Player.UpdateFood))]
@@ -60,8 +53,7 @@ namespace SmoothRegen
             // the rest goes into the buffer. Subtracting keeps instant + smoothed == hp exactly.
             var fraction = Mathf.Clamp01(Plugin.InstantFraction.Value);
             var smoothed = hp * (1f - fraction);
-            State.Buffer.Add(smoothed, Plugin.Window.Value,
-                __instance.GetMaxHealth() * State.PendingCapMultiplier);
+            State.Buffer.Add(smoothed, Plugin.Window.Value);
 
             hp -= smoothed;
             return hp > 0f;
@@ -74,18 +66,28 @@ namespace SmoothRegen
     {
         private static void Postfix(Player __instance, float dt)
         {
-            if (!Plugin.Enabled.Value) return;
             if (__instance != Player.m_localPlayer) return;
 
-            // Character.RPC_Heal clamps to max health and silently drops the excess, so vanilla
-            // forfeits regen earned at full health. Match that: drain on the clock whatever the
-            // health bar looks like. Holding it back instead banks a burst that dumps the moment
-            // damage opens headroom, which is exactly what this mod exists to prevent.
+            // Switching the mod off mid-window must not strand what is still owed: without this
+            // the buffer keeps its amount and its rate, and switching back on resumes paying a
+            // stale heal earned minutes ago.
+            if (!Plugin.Enabled.Value)
+            {
+                State.Buffer.Clear();
+                return;
+            }
+
+            // Character.RPC_Heal clamps to max health, but only AT THE TICK INSTANT: vanilla
+            // damage taken at t=9.9 still collects the whole tick at t=10. So hold the payout
+            // while there is no headroom rather than draining it into a full bar, which would
+            // forfeit every full-health frame and heal strictly less than no mod at all.
+            // RegenBuffer.Add caps pending at one window's worth of vanilla regen, so the hold
+            // can never discharge faster than vanilla's own average rate.
+            // (Heal() is also an RPC when we are not the owner - no point calling it for nothing.)
+            if (__instance.GetHealth() >= __instance.GetMaxHealth()) return;
+
             var chunk = State.Buffer.Take(dt);
             if (chunk <= 0f) return;
-
-            // Nothing would land anyway, and Heal() is an RPC when we are not the owner.
-            if (__instance.GetHealth() >= __instance.GetMaxHealth()) return;
 
             State.Paying = true;
             try

@@ -72,21 +72,45 @@ rather than a second multiply, so instant + smoothed equals the original
 exactly. It stays ONE heal - the prefix skips the original only when the
 instant share is zero. 0.0 is fully smooth with maximum lag, 1.0 is vanilla.
 
-### Forfeiting the buffer at full health
+### Holding the buffer at full health, and the cap that bounds it
 
 `Character.RPC_Heal` clamps to `GetMaxHealth()` and silently discards the
-excess, so vanilla wastes a tick that lands at full health. SmoothRegen does
-the same: `UpdateStatsPatch` drains the buffer on the clock whatever the health
-bar looks like, and skips only the `Heal` call itself when there is no headroom
-(nothing would land, and `Heal` is an RPC when we are not the owner).
+excess - but only **at the instant the tick fires**. Vanilla damage taken at
+t=9.9 still collects the whole tick at t=10. `UpdateStatsPatch` therefore
+returns *before* `Take` when there is no headroom, holding the payout instead
+of draining it into a full bar. Draining it was a real nerf: every full-health
+frame forfeited its own 1/500th of a tick, so topping off before a fight healed
+strictly less than playing with no mod installed. (Skipping `Heal` is also right
+on its own terms - nothing would land, and `Heal` is an RPC when we are not the
+owner.)
 
-Retaining it instead - the original design, `Take(dt, headroom)` - was a defect.
-At full health the buffer accumulated up to `2 * GetMaxHealth()` and, once
-damage opened headroom, discharged at `pending / SmoothingWindow`, i.e. ~20 hp/s:
-take a hit, get healed straight back. That is the opposite of the mod's purpose.
-`Take` no longer accepts a limit, so the behaviour cannot come back by accident;
-`State.PendingCapMultiplier` remains only as a backstop against another mod
-driving `Player.UpdateFood` without letting `Player.UpdateStats(float)` run.
+Holding is only safe because it is bounded. The original `Take(dt, headroom)`
+design let the buffer accumulate to `2 * GetMaxHealth()` and, once damage opened
+headroom, discharge at `pending / SmoothingWindow` - ~20 hp/s, a hit that heals
+straight back off. That is the opposite of the mod's purpose. `Take` still takes
+no limit, so that cannot come back by accident; instead `RegenBuffer.Add` caps
+pending at **one window's worth of vanilla regen**,
+`amount * max(1, SmoothingWindow / 10)`:
+
+- At the default 10s window the ceiling is exactly one tick, so the worst case
+  burst is what vanilla itself would have handed over at a single tick.
+- A longer window legitimately keeps several ticks in flight, and the formula
+  scales with it rather than clipping healing the player is owed.
+- Either way `pending / SmoothingWindow` never exceeds vanilla's own average
+  rate of one tick per 10s. The payout rate is bounded by construction.
+
+The residual difference from vanilla is one tick held in flight, delivered late
+rather than forfeited - which is the smoothing lag the mod exists to trade for,
+not a buff.
+
+### Switching the mod off at runtime
+
+`Enabled` is read every frame. On the disabled path `UpdateStatsPatch` clears
+the buffer instead of merely returning: otherwise the pending amount *and* its
+rate survive untouched, and switching the mod back on minutes later resumes
+paying out a heal earned before it was turned off. The cost is forfeiting at
+most one tick, once, at a moment the player deliberately asked the mod to stop
+- the alternative, healing on after being switched off, is worse.
 
 ### Confirmed facts
 

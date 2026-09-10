@@ -21,6 +21,8 @@ namespace SmoothRegen.Tests
             SplitTickStillTotalsTheOriginal();
             CapLimitsWhatIsBanked();
             FullHealthDoesNotBankABurst();
+            DisableThenReenablePaysNothingStale();
+            FullHealthThenDamageStillPaysTheWholeTick();
 
             if (_failures == 0)
             {
@@ -69,16 +71,18 @@ namespace SmoothRegen.Tests
             Near("nothing more to give", buffer.Take(1f), 0f);
         }
 
-        // A new tick landing before the old one drained must not strand the remainder.
+        // A window longer than vanilla's 10s tick period keeps several ticks in flight at once.
+        // The tick landing on top of an undrained one must not strand the remainder, and must
+        // stay under the cap - one window's worth of regen is 2 ticks here, and 15 is held.
         private static void OverlappingTicksKeepTotal()
         {
             var buffer = new RegenBuffer();
             var total = 0f;
 
-            buffer.Add(10f, 10f);
-            total += DrainSeconds(buffer, seconds: 4f, dt: 1f / 60f);
+            buffer.Add(10f, 20f);
+            total += DrainSeconds(buffer, seconds: 10f, dt: 1f / 60f);
 
-            buffer.Add(10f, 10f); // second tick arrives early
+            buffer.Add(10f, 20f); // second tick arrives while the first is still paying out
             total += DrainSeconds(buffer, seconds: 30f, dt: 1f / 60f);
 
             Near("both ticks fully paid", total, 20f);
@@ -134,22 +138,28 @@ namespace SmoothRegen.Tests
             }
         }
 
-        // Ticks banked while at full health must not grow without bound.
+        // Ticks banked while at full health must not grow without bound. The ceiling is one
+        // window's worth of vanilla regen: one tick for a window at or below vanilla's 10s
+        // period, proportionally more for a longer window (which legitimately holds several
+        // ticks in flight). Either way pending / window <= vanilla's own average rate.
         private static void CapLimitsWhatIsBanked()
         {
-            var buffer = new RegenBuffer();
-            const float cap = 50f;
+            var short10 = new RegenBuffer();
+            for (var i = 0; i < 20; i++) short10.Add(20f, 10f);
 
-            for (var i = 0; i < 20; i++)
-                buffer.Add(20f, 10f, cap);
+            Near("capped at one tick for a 10s window", short10.Pending, 20f);
+            Near("pays out only the cap", DrainSeconds(short10, seconds: 30f, dt: 1f / 60f), 20f);
 
-            Near("pending capped", buffer.Pending, cap);
-            Near("pays out only the cap", DrainSeconds(buffer, seconds: 30f, dt: 1f / 60f), cap);
+            var long30 = new RegenBuffer();
+            for (var i = 0; i < 20; i++) long30.Add(20f, 30f);
+
+            Near("capped at three ticks for a 30s window", long30.Pending, 60f);
+            Near("still vanilla's rate", DrainSeconds(long30, seconds: 10f, dt: 1f / 60f), 20f);
         }
 
-        // Character.RPC_Heal drops anything above max health, so regen earned at full health is
-        // forfeited, not banked. Holding it back instead lets the buffer swell and dump the whole
-        // bank the instant damage opens headroom - a hit that heals straight back off.
+        // Regression guard for b2f8500: however long the player idles, the buffer must never
+        // swell into a bank that dumps the instant damage opens headroom - a hit that heals
+        // straight back off. Ten minutes of ticks may leave at most one tick pending.
         private static void FullHealthDoesNotBankABurst()
         {
             const float dt = 1f / 50f;   // Player.UpdateStats(float) runs from FixedUpdate
@@ -159,7 +169,7 @@ namespace SmoothRegen.Tests
             // Ten minutes at full health: a tick every 10s, drained every frame into a full bar.
             for (var frame = 1; frame <= 30000; frame++)
             {
-                if (frame % 500 == 0) buffer.Add(tick, 10f, cap: 200f);
+                if (frame % 500 == 0) buffer.Add(tick, 10f);
                 buffer.Take(dt);
             }
 
@@ -170,6 +180,56 @@ namespace SmoothRegen.Tests
             var firstSecond = DrainSeconds(buffer, seconds: 1f, dt: dt);
             if (firstSecond > tick / 10f + 0.1f)
                 Fail($"burst on damage: {firstSecond} hp in the first second, expected <= {tick / 10f}");
+        }
+
+        // Switching the mod off mid-window strands whatever is still owed, and the amount AND the
+        // rate survive: switching it back on later resumed paying a heal earned minutes ago.
+        // UpdateStatsPatch now clears the buffer on its disabled early return.
+        private static void DisableThenReenablePaysNothingStale()
+        {
+            const float dt = 1f / 50f;
+            var buffer = new RegenBuffer();
+
+            buffer.Add(20f, 10f);
+            DrainSeconds(buffer, seconds: 2f, dt: dt);   // 2s in, ~16 hp still owed
+
+            buffer.Clear();                              // the mod is switched off
+
+            Near("nothing stranded on disable", buffer.Pending, 0f);
+            Near("re-enabled, nothing stale to pay", DrainSeconds(buffer, seconds: 30f, dt: dt), 0f);
+
+            // The next real tick pays its own amount at its own rate, not the abandoned one.
+            buffer.Add(5f, 10f);
+            Near("fresh tick pays only itself", DrainSeconds(buffer, seconds: 15f, dt: dt), 5f);
+        }
+
+        // Vanilla clamps at the tick instant only: damage taken at t=9.9 still collects the whole
+        // tick at t=10. Draining into a full bar forfeited every full-health frame instead, so
+        // topping off before a fight healed strictly less than playing with no mod at all.
+        // UpdateStatsPatch now returns before Take when there is no headroom; the cap in Add is
+        // what keeps that hold from becoming a burst.
+        private static void FullHealthThenDamageStillPaysTheWholeTick()
+        {
+            const float dt = 1f / 50f;
+            const float tick = 15f;
+            const float window = 10f;
+            var buffer = new RegenBuffer();
+
+            // A minute at full health. Mirrors the patch: no headroom, so Take is never called.
+            for (var frame = 1; frame <= 3000; frame++)
+                if (frame % 500 == 0) buffer.Add(tick, window);
+
+            if (buffer.Pending > tick)
+                Fail($"held {buffer.Pending} hp at full health, more than one {tick} hp tick");
+
+            // Damage opens headroom. The first second must not dump a bank...
+            var firstSecond = DrainSeconds(buffer, seconds: 1f, dt: dt);
+            if (firstSecond > tick / 10f + 0.1f)
+                Fail($"burst on damage: {firstSecond} hp in the first second, expected <= {tick / 10f}");
+
+            // ...and the tick the player was owed must arrive in full, exactly like vanilla.
+            var total = firstSecond + DrainSeconds(buffer, seconds: window, dt: dt);
+            Near("whole tick delivered after topping off", total, tick);
         }
 
         private static float DrainSeconds(RegenBuffer buffer, float seconds, float dt)
