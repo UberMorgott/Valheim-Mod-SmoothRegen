@@ -130,7 +130,7 @@ the buffer instead of merely returning: otherwise the pending amount *and* its
 rate survive untouched, and switching the mod back on minutes later resumes
 paying out a heal earned before it was turned off. The cost is forfeiting at
 most one tick, once, at a moment the player deliberately asked the mod to stop
-- the alternative, healing on after being switched off, is worse.
+— the alternative, healing on after being switched off, is worse.
 
 That cost includes a tick banked in the very same frame. `UpdateFood` runs from
 inside `UpdateStats(dt)`, so the `Heal` prefix banks before our `UpdateStats`
