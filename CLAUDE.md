@@ -1,3 +1,6 @@
+# Workspace
+Valheim workspace rules: E:\DEV\Valheim\CLAUDE.md and shared memory C:\Users\Morgott\.claude\projects\E--DEV-Valheim\memory\MEMORY.md — read both first.
+
 <!-- quality-gate -->
 ## Completion gate (mandatory)
 
