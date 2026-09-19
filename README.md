@@ -97,4 +97,4 @@ No code, configuration names or text were reused.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Copyright (c) 2026 Morgott.
+CC BY-NC 4.0, see [LICENSE](LICENSE). Copyright (c) 2026 Morgott.
