@@ -97,4 +97,6 @@ No code, configuration names or text were reused.
 
 ## License
 
-CC BY-NC 4.0, see [LICENSE](LICENSE). Copyright (c) 2026 Morgott.
+Original project code and documentation are licensed under CC BY-NC 4.0; see [LICENSE](LICENSE). Copyright (c) 2026 Morgott.
+
+Third-party dependencies retain their own licenses.
