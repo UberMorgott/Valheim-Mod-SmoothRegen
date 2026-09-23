@@ -7,8 +7,14 @@ Valheim health regeneration that rises smoothly instead of jumping.
 Vanilla Valheim heals you from food in one lump every 10 seconds. Your health
 bar sits still, then jerks upward, then sits still again.
 
-SmoothRegen catches that lump and pays out the exact same amount continuously
-over the following seconds. The health bar climbs instead of stepping.
+Healing meads are no better: a mead that restores 50 health over 10 seconds
+hands it over as two 25-point jumps.
+
+SmoothRegen catches those lumps and pays out the exact same amount continuously
+over the following seconds. The health bar climbs instead of stepping. Food ticks
+are spread over `SmoothingWindow`; a status effect's lump is spread over that
+effect's own interval, so it finishes exactly as the next lump arrives and the
+mead's total and duration are untouched.
 
 **Total healing per minute is identical to vanilla.** This is a feel change,
 not a buff. If you ever measure a difference in total healing, that is a bug,
@@ -22,14 +28,13 @@ first launch.
 | Option | Default | Range | Meaning |
 | --- | --- | --- | --- |
 | `Enabled` | `true` | on / off | Turn smoothing off without removing the DLL. Vanilla behaviour returns immediately. |
-| `SmoothingWindow` | `10` | 0.5 - 30 seconds | How long each food tick is spread over. |
-| `InstantFraction` | `0.25` | 0.0 - 1.0 | Share of each tick applied immediately; the rest is spread over the window. |
+| `SmoothingWindow` | `10` | 0.5 - 10 seconds | How long each food tick is spread over. Status-effect lumps use the effect's own interval instead. |
+| `InstantFraction` | `0` | 0.0 - 1.0 | Share of each lump applied immediately; the rest is spread over the window. |
 
 `SmoothingWindow` at the default of 10 seconds matches the vanilla tick period,
-so healing becomes an even trickle. Shorter values give a faster catch-up after
-each tick with a short pause before the next one. Longer values overlap
-consecutive ticks, which is smoother still but makes healing lag slightly
-behind when you eat.
+so healing becomes an even trickle: one tick is handed over precisely as the next
+arrives. Shorter values give a faster catch-up after each tick with a pause before
+the next one. Anything longer would only add a backlog, so 10 is also the maximum.
 
 ### The trade-off, stated honestly
 
@@ -38,19 +43,21 @@ later than vanilla would have put it there, on average by half the smoothing
 window. That lag is unavoidable, not a bug: the game does not know the amount
 until the tick fires, so there is nothing to pay out early.
 
-`InstantFraction` is the dial for it. At `0.0` the whole tick is smoothed, which
-looks best and lags most. At `1.0` you get vanilla back, jump and all. The
-default `0.25` gives you a quarter of each tick straight away, which takes the
-edge off the delay in a fight while still keeping the bar smooth. Total healing
-per minute is identical at every setting.
+`InstantFraction` is the dial for it. At the default `0.0` the whole lump is
+smoothed, which looks best and lags most. At `1.0` you get vanilla back, jump and
+all. Raise it to take the edge off the delay in a fight. Total healing per minute
+is identical at every setting.
 
 ### Healing at full health is kept, not wasted
 
 Vanilla throws away a food tick that lands while you are already at full health.
 SmoothRegen keeps it: the pending amount stays in the buffer and starts paying
 out the moment you take damage. This is a small deliberate deviation from
-vanilla, and the only one. It is bounded, pending healing never exceeds twice
-your max health, so idling at full health for an hour banks nothing extra.
+vanilla, and the only one. It is bounded to a single tick, so idling at full
+health for an hour banks nothing extra.
+
+Status-effect healing is not held back this way. Vanilla pays each mead lump on
+its own schedule and lets the excess clamp away at full health, and so do we.
 
 ## Requirements
 

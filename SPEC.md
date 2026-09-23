@@ -61,6 +61,41 @@ Hook `Player.UpdateFood`:
 Only the timing changes. The amount is whatever the game produced, so every
 other mod's contribution is preserved verbatim.
 
+### Health-over-time status effects (healing meads)
+
+The food tick is not the only steppy heal. `SE_Stats` pays `m_healthOverTime` out in
+`m_healthOverTimeDuration / m_healthOverTimeInterval` lumps, the interval defaulting
+to **5 s** (`SE_Stats.cs:162-170, 235-243`), so a mead that restores 50 hp over 10 s
+lands as two 25 hp jumps. The same method also applies one `m_healthPerTick` lump per
+`m_tickInterval` (`SE_Stats.cs:211-222`).
+
+Same design rule, same hook shape: a prefix/finalizer on `SE_Stats.UpdateStatusEffect`
+records the effect being updated for the local player, and the `Character.Heal` prefix
+diverts whatever it heals into a second buffer. The window is the effect's **own**
+interval - the gap to its next lump - so each lump finishes paying out exactly as the
+next one arrives, and the effect's total and duration are untouched.
+
+That second buffer is constructed with `boundToOneTick: false`:
+
+- **No window clamp.** The 10 s clamp exists because the food buffer merges ticks that
+  arrive on an undrained pool. Here the window *is* the gap between lumps, so nothing
+  ever piles up, and an effect with a 30 s interval should be spread over 30 s.
+- **No one-tick ceiling.** Two healing meads ticking in the same frame would forfeit
+  the smaller lump under `max(incoming, held)`. The ceiling only ever existed to bound
+  what a *held* payout can discharge as, and nothing is held here.
+- **No hold at full health.** `UpdateStatsPatch` skips the food buffer when there is no
+  headroom, because vanilla's tick would have collected damage taken up to the tick
+  instant. A status effect has no such instant to defend: vanilla pays each lump on its
+  own schedule and lets `RPC_Heal` clamp the excess away. Holding one back would hand
+  the player healing vanilla never gave.
+
+Tests: `UnboundBufferKeepsConcurrentEffectsWhole`,
+`UnboundBufferTakesAWindowLongerThanATick`.
+
+Not covered: `m_healthUpFront`, applied from `StartupEffects` (`SE_Stats.cs:182-187`)
+outside `UpdateStatusEffect`. It is the deliberately instant part of an effect and stays
+instant.
+
 ### The lag, and InstantFraction
 
 Smoothing is not free. A continuous payout of the same total always trails
@@ -188,15 +223,17 @@ folded into that one number, whatever it came from.
 - AugaLite patches `Hud.UpdateFood` - same method name, different type, not a
   conflict.
 - No plugin writes `Character.m_health` directly or heals the player outside
-  `Character.Heal`. Almanac's custom effects heal through `Character.Heal` but
-  from `SE_Update`, outside our flag window, so they are untouched.
+  `Character.Heal`. Almanac's custom effects heal through `Character.Heal` from
+  `SE_Update`; since the `SE_Stats.UpdateStatusEffect` hook was added they are
+  smoothed too, which is the same feel change for the same total.
 - EquipmentAndQuickSlots postfixes `Player.OnDeath` at priority 0, running
   after our buffer clear. The two are independent, order does not matter.
 
 ### Known limitation: the in-tick flag is scoped to the method, not to the call
 
-`State.InFoodTick` is set for the whole of `Player.UpdateFood`, so the `Heal`
-prefix captures *any* heal on the local player that happens inside that call -
+`State.InFoodTick` is set for the whole of `Player.UpdateFood`, and
+`State.OverTimeSource` for the whole of `SE_Stats.UpdateStatusEffect`, so the `Heal`
+prefix captures *any* heal on the local player that happens inside those calls -
 not only vanilla's own. Vanilla's `UpdateFood` contains exactly one `Heal`
 (confirmed in the 1.0.7 decompile), so today nothing else is caught. The
 exposure is another mod healing the local player from inside the same call:

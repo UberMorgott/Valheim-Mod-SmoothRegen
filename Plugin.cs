@@ -50,7 +50,7 @@ namespace SmoothRegen
         private void OnDestroy()
         {
             _harmony?.UnpatchSelf();
-            State.Buffer.Clear();
+            State.Clear();
         }
     }
 }

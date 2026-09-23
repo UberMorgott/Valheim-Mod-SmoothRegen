@@ -18,13 +18,26 @@ namespace SmoothRegen
     /// </summary>
     internal static class State
     {
-        internal static readonly RegenBuffer Buffer = new RegenBuffer();
+        /// <summary>The 10 s food regen tick.</summary>
+        internal static readonly RegenBuffer Food = new RegenBuffer();
+
+        /// <summary>Health-over-time status effects: healing meads, per-tick healing effects.</summary>
+        internal static readonly RegenBuffer OverTime = new RegenBuffer(boundToOneTick: false);
 
         /// <summary>True while the game is inside the food regen tick.</summary>
         internal static bool InFoodTick;
 
+        /// <summary>The status effect being updated, while the game is inside its update.</summary>
+        internal static SE_Stats OverTimeSource;
+
         /// <summary>True while we are paying the buffer back out, to avoid re-capturing our own heal.</summary>
         internal static bool Paying;
+
+        internal static void Clear()
+        {
+            Food.Clear();
+            OverTime.Clear();
+        }
     }
 
     [HarmonyPatch(typeof(Player), nameof(Player.UpdateFood))]
@@ -42,24 +55,74 @@ namespace SmoothRegen
         private static void Finalizer(bool __state) => State.InFoodTick = __state;
     }
 
+    /// <summary>
+    /// Healing meads and other health-over-time effects are just as steppy as the food tick:
+    /// SE_Stats pays m_healthOverTime out in m_healthOverTimeDuration / m_healthOverTimeInterval
+    /// lumps (SE_Stats.cs:168-169, 235-243, interval defaulting to 5 s), plus one m_healthPerTick
+    /// lump per m_tickInterval (SE_Stats.cs:211-222). Marking the effect being updated lets the
+    /// Heal prefix below divert those lumps too, with the effect's own interval as the window, so
+    /// each lump is paid out exactly as the next one arrives.
+    /// </summary>
+    [HarmonyPatch(typeof(SE_Stats), nameof(SE_Stats.UpdateStatusEffect))]
+    internal static class UpdateStatusEffectPatch
+    {
+        private static void Prefix(SE_Stats __instance, out SE_Stats __state)
+        {
+            __state = State.OverTimeSource;
+            if (__instance.m_character != null && __instance.m_character == Player.m_localPlayer)
+                State.OverTimeSource = __instance;
+        }
+
+        private static void Finalizer(SE_Stats __state) => State.OverTimeSource = __state;
+    }
+
     [HarmonyPatch(typeof(Character), nameof(Character.Heal))]
     internal static class HealPatch
     {
         private static bool Prefix(Character __instance, ref float hp)
         {
             if (!Plugin.Enabled.Value) return true;
-            if (!State.InFoodTick || State.Paying) return true;
+            if (State.Paying) return true;
             if (hp <= 0f) return true;
             if (__instance == null || __instance != Player.m_localPlayer) return true;
+
+            RegenBuffer buffer;
+            float window;
+            if (State.InFoodTick)
+            {
+                buffer = State.Food;
+                window = Plugin.Window.Value;
+            }
+            else if (State.OverTimeSource != null)
+            {
+                buffer = State.OverTime;
+                window = Interval(State.OverTimeSource);
+            }
+            else
+            {
+                return true;
+            }
 
             // Split the lump: the instant share rides on the original call (still ONE heal),
             // the rest goes into the buffer. Subtracting keeps instant + smoothed == hp exactly.
             var fraction = Mathf.Clamp01(Plugin.InstantFraction.Value);
             var smoothed = hp * (1f - fraction);
-            State.Buffer.Add(smoothed, Plugin.Window.Value);
+            buffer.Add(smoothed, window);
 
             hp -= smoothed;
             return hp > 0f;
+        }
+
+        /// <summary>
+        /// Seconds until this effect's next heal. An effect can in principle carry both a
+        /// health-over-time payout and a per-tick one; they are indistinguishable from inside the
+        /// Heal prefix, so the over-time interval wins. Worst case is one lump spread over the
+        /// other's interval, never a lost or an extra hp.
+        /// </summary>
+        private static float Interval(SE_Stats se)
+        {
+            if (se.m_healthOverTime > 0f && se.m_healthOverTimeInterval > 0f) return se.m_healthOverTimeInterval;
+            return se.m_tickInterval > 0f ? se.m_tickInterval : RegenBuffer.VanillaTickPeriod;
         }
     }
 
@@ -76,20 +139,25 @@ namespace SmoothRegen
             // stale heal earned minutes ago.
             if (!Plugin.Enabled.Value)
             {
-                State.Buffer.Clear();
+                State.Clear();
                 return;
             }
 
             // Character.RPC_Heal clamps to max health, but only AT THE TICK INSTANT: vanilla
-            // damage taken at t=9.9 still collects the whole tick at t=10. So hold the payout
+            // damage taken at t=9.9 still collects the whole tick at t=10. So hold the food payout
             // while there is no headroom rather than draining it into a full bar, which would
             // forfeit every full-health frame and heal strictly less than no mod at all.
             // RegenBuffer.Add caps pending at one window's worth of vanilla regen, so the hold
             // can never discharge faster than vanilla's own average rate.
-            // (Heal() is also an RPC when we are not the owner - no point calling it for nothing.)
-            if (__instance.GetHealth() >= __instance.GetMaxHealth()) return;
+            var chunk = 0f;
+            if (__instance.GetHealth() < __instance.GetMaxHealth()) chunk += State.Food.Take(dt);
 
-            var chunk = State.Buffer.Take(dt);
+            // Status-effect heals get no such hold: vanilla pays every one of their lumps out on
+            // its own schedule and lets RPC_Heal clamp the excess away, so holding one back would
+            // hand the player healing vanilla never gave.
+            chunk += State.OverTime.Take(dt);
+
+            // (Heal() is also an RPC when we are not the owner - no point calling it for nothing.)
             if (chunk <= 0f) return;
 
             State.Paying = true;
@@ -116,7 +184,7 @@ namespace SmoothRegen
     {
         private static void Postfix(Player __instance)
         {
-            if (__instance == Player.m_localPlayer) State.Buffer.Clear();
+            if (__instance == Player.m_localPlayer) State.Clear();
         }
     }
 
@@ -126,7 +194,7 @@ namespace SmoothRegen
     {
         private static void Postfix(Player __instance)
         {
-            if (__instance == Player.m_localPlayer) State.Buffer.Clear();
+            if (__instance == Player.m_localPlayer) State.Clear();
         }
     }
 }

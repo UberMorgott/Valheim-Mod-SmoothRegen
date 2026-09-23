@@ -25,6 +25,8 @@ namespace SmoothRegen.Tests
             FullHealthThenDamageStillPaysTheWholeTick();
             LongWindowStillPaysEachTickWithinTheTickPeriod();
             ASmallerTickDoesNotTruncateWhatIsAlreadyHeld();
+            UnboundBufferKeepsConcurrentEffectsWhole();
+            UnboundBufferTakesAWindowLongerThanATick();
             RandomChurnKeepsEveryInvariant();
 
             if (_failures == 0)
@@ -290,6 +292,32 @@ namespace SmoothRegen.Tests
         //   4. a tick's amount is frozen at insertion - later events do not change money in flight.
         // Own LCG, not System.Random, so the sequence is identical on any runtime: a failure prints
         // the seed and step index and replays exactly.
+        // Status-effect heals share one buffer, so two healing meads ticking in the same frame must
+        // both be paid in full: the one-tick ceiling that guards the food buffer would forfeit the
+        // smaller of the two.
+        private static void UnboundBufferKeepsConcurrentEffectsWhole()
+        {
+            var buffer = new RegenBuffer(boundToOneTick: false);
+            buffer.Add(25f, 5f);
+            buffer.Add(10f, 5f);
+
+            Near("both lumps held", buffer.Pending, 35f);
+            Near("both lumps paid", DrainSeconds(buffer, seconds: 10f, dt: 1f / 60f), 35f);
+        }
+
+        // An effect whose interval is longer than the food tick period is paid out over that
+        // interval, not squeezed into 10s: the clamp belongs to the food buffer alone.
+        private static void UnboundBufferTakesAWindowLongerThanATick()
+        {
+            var buffer = new RegenBuffer(boundToOneTick: false);
+            buffer.Add(30f, 30f);
+
+            var afterTenSeconds = DrainSeconds(buffer, seconds: 10f, dt: 1f / 60f);
+
+            Near("a third paid after a third of the window", afterTenSeconds, 10f, 0.05f);
+            Near("the rest paid by the end", DrainSeconds(buffer, seconds: 20f, dt: 1f / 60f), 20f, 0.05f);
+        }
+
         private static void RandomChurnKeepsEveryInvariant()
         {
             const uint seed = 20260910u;
