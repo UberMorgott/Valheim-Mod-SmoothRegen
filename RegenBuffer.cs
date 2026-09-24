@@ -95,6 +95,21 @@ namespace SmoothRegen
         }
     }
 
+    public static class RegenMath
+    {
+        /// <summary>
+        /// Health a <paramref name="total"/>-over-<paramref name="duration"/> effect earns in the
+        /// step from <paramref name="elapsed"/> to elapsed + <paramref name="dt"/> game seconds:
+        /// its constant rate, cut off at the end of the duration, so the shares sum to the total.
+        /// </summary>
+        public static float OverTimeShare(float total, float duration, float elapsed, float dt)
+        {
+            if (total <= 0f || duration <= 0f || dt <= 0f) return 0f;
+            var span = Math.Min(dt, duration - elapsed);
+            return span > 0f ? total * span / duration : 0f;
+        }
+    }
+
     /// <summary>
     /// Turns the fractional hp the buffers earn each frame into whole +1 hp steps, so a rate of
     /// R hp/s lands as R one-hp heals per second. What is earned but not yet a whole hp is carried,

@@ -12,11 +12,11 @@ hands it over as two 25-point jumps.
 
 SmoothRegen catches those lumps and pays out the exact same amount continuously
 over the following seconds. The health bar climbs instead of stepping. Food ticks
-are spread over `SmoothingWindow`; a status effect's lump is spread over that
-effect's own interval, so it finishes exactly as the next lump arrives and the
-mead's total and duration are untouched. Up-front (instant) effect heals are
+are spread over `SmoothingWindow`; a mead pays its total evenly over its own
+duration, so its total and end time are untouched. Up-front (instant) effect heals are
 spread over one second. Healing always lands in +1 hp steps: 5 hp/s is five
-one-point heals per second.
+one-point heals per second. Meads start healing the moment you drink them, and
+food regen starts the moment you enter the world.
 
 **Total healing per minute is identical to vanilla.** This is a feel change,
 not a buff. If you ever measure a difference in total healing, that is a bug,

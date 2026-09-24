@@ -29,6 +29,8 @@ namespace SmoothRegen.Tests
             UnboundBufferTakesAWindowLongerThanATick();
             RandomChurnKeepsEveryInvariant();
             MeadLumpsLandAsWholeHpStepsAndTotalVanilla();
+            TickCountFollowsGameTimeNotStepRate();
+            FoodPaysFromTheFirstFrameAfterSpawn();
             PayoutFlushesTheFractionalRest();
 
             if (_failures == 0)
@@ -41,32 +43,76 @@ namespace SmoothRegen.Tests
             return 1;
         }
 
-        // A minor healing mead: 50 hp over 10 s in two 25 hp lumps every 5 s (SE_Stats.cs:168-169).
-        // At 50 Hz fixed steps each heal must be exactly 1 hp, 5 per second, 50 in total.
+        // A minor healing mead: 50 hp over 10 s (vanilla: two 25 hp lumps, the first at 5 s).
+        // Paid from the drink: +1 hp steps, 5 in the first second, 50 in total, done by 10 s.
         private static void MeadLumpsLandAsWholeHpStepsAndTotalVanilla()
         {
-            var buffer = new RegenBuffer(boundToOneTick: false);
             var payout = new WholeHpPayout();
             const float dt = 0.02f;
-            float total = 0f;
-            int heals = 0;
-            int healsInFirstSecond = 0;
+            float total = 0f, elapsed = 0f, firstHealAt = -1f, lastHealAt = 0f;
+            int heals = 0, healsInFirstSecond = 0;
 
             for (int step = 0; step < 1000; step++)
             {
-                if (step == 0 || step == 250) buffer.Add(25f, 5f);
-                var paid = payout.Pay(buffer.Take(dt), buffer.Pending <= 0f);
+                var share = RegenMath.OverTimeShare(50f, 10f, elapsed, dt);
+                elapsed += dt;
+                var paid = payout.Pay(share, share <= 0f);
                 if (paid <= 0f) continue;
 
                 if (Math.Abs(paid - 1f) > 0.001f) Fail($"mead heal step {step} was {paid}, expected +1");
                 total += paid;
                 heals++;
-                if (step < 50) healsInFirstSecond++;
+                if (firstHealAt < 0f) firstHealAt = elapsed;
+                lastHealAt = elapsed;
+                if (elapsed <= 1.0001f) healsInFirstSecond++;
             }
 
             Near("mead total", total, 50f);
             if (heals != 50) Fail($"expected 50 one-hp heals, got {heals}");
             if (healsInFirstSecond != 5) Fail($"expected 5 heals in the first second, got {healsInFirstSecond}");
+            if (firstHealAt > 0.21f) Fail($"first mead heal at {firstHealAt}s, expected by 0.2s");
+            // Float game time may leave a sliver for one extra step; vanilla's last lump also lands
+            // on the first step past 10 s (timer > interval, SE_Stats.cs:238).
+            if (lastHealAt > 10f + 2f * dt) Fail($"mead still healing at {lastHealAt}s, past its 10s duration");
+        }
+
+        // Due ticks follow game time, not the step rate: 5 hp/s pays 5 hp per game second whether
+        // the game steps at 50 Hz or 7 Hz (several ticks due in one step are paid in that step).
+        private static void TickCountFollowsGameTimeNotStepRate()
+        {
+            foreach (var dt in new[] { 0.02f, 1f / 7f, 0.5f })
+            {
+                var payout = new WholeHpPayout();
+                float total = 0f, elapsed = 0f;
+                while (elapsed < 4f - 1e-4f)
+                {
+                    total += payout.Pay(RegenMath.OverTimeShare(50f, 10f, elapsed, dt), false);
+                    elapsed += dt;
+                }
+                var due = (float)Math.Floor(elapsed * 5f + 1e-3f);
+                Near($"hp paid after {elapsed}s at dt {dt}", total, due);
+            }
+        }
+
+        // World join: the food tick is due on the first frame, so +1 hp steps start at once.
+        // 20 hp per 10 s tick = 2 hp/s: first heal within half a second, 20 by the window's end.
+        private static void FoodPaysFromTheFirstFrameAfterSpawn()
+        {
+            var buffer = new RegenBuffer();
+            var payout = new WholeHpPayout();
+            const float dt = 0.02f;
+            buffer.Add(20f, 10f); // the tick OnSpawnedPatch makes fire on the first UpdateFood
+            float total = 0f, firstHealAt = -1f;
+
+            for (int step = 1; step <= 500; step++)
+            {
+                var paid = payout.Pay(buffer.Take(dt), buffer.Pending <= 0f);
+                total += paid;
+                if (paid > 0f && firstHealAt < 0f) firstHealAt = step * dt;
+            }
+
+            if (firstHealAt < 0f || firstHealAt > 0.51f) Fail($"first food heal at {firstHealAt}s, expected by 0.5s");
+            Near("food total over one window", total, 20f);
         }
 
         // A lump that is not a whole number still pays out in full: the rest comes as one last step.

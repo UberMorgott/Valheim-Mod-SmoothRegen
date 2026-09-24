@@ -42,6 +42,9 @@ namespace SmoothRegen
         /// <summary>True while a status effect applies its up-front heal.</summary>
         internal static bool InUpFront;
 
+        /// <summary>Mead health-over-time earned since the last payout (see UpdateStatusEffectPatch).</summary>
+        internal static float OverTimeEarned;
+
         /// <summary>The status effect being updated, while the game is inside its update.</summary>
         internal static SE_Stats OverTimeSource;
 
@@ -54,6 +57,7 @@ namespace SmoothRegen
             OverTime.Clear();
             UpFront.Clear();
             Payout.Clear();
+            OverTimeEarned = 0f;
         }
     }
 
@@ -73,24 +77,46 @@ namespace SmoothRegen
     }
 
     /// <summary>
-    /// Healing meads and other health-over-time effects are just as steppy as the food tick:
-    /// SE_Stats pays m_healthOverTime out in m_healthOverTimeDuration / m_healthOverTimeInterval
-    /// lumps (SE_Stats.cs:168-169, 235-243, interval defaulting to 5 s), plus one m_healthPerTick
-    /// lump per m_tickInterval (SE_Stats.cs:211-222). Marking the effect being updated lets the
-    /// Heal prefix below divert those lumps too, with the effect's own interval as the window, so
-    /// each lump is paid out exactly as the next one arrives.
+    /// Healing meads: SE_Stats pays m_healthOverTime out in m_healthOverTimeDuration /
+    /// m_healthOverTimeInterval lumps, the first only one interval (5 s by default) after the
+    /// drink (SE_Stats.cs:162-170, 235-243). Buffering those lumps would still wait for the first
+    /// one, so instead we pay the effect's rate, m_healthOverTime / m_healthOverTimeDuration,
+    /// every frame from the moment it is added until its duration ends, and keep the vanilla lump
+    /// from ever firing. Same total, same end time, no wait.
+    ///
+    /// m_healthPerTick lumps (SE_Stats.cs:211-222) are still diverted by the Heal prefix below,
+    /// spread over the effect's m_tickInterval.
     /// </summary>
     [HarmonyPatch(typeof(SE_Stats), nameof(SE_Stats.UpdateStatusEffect))]
     internal static class UpdateStatusEffectPatch
     {
-        private static void Prefix(SE_Stats __instance, out SE_Stats __state)
+        private static void Prefix(SE_Stats __instance, float dt, out SE_Stats __state)
         {
             __state = State.OverTimeSource;
-            if (__instance.m_character != null && __instance.m_character == Player.m_localPlayer)
-                State.OverTimeSource = __instance;
+            if (__instance.m_character == null || __instance.m_character != Player.m_localPlayer) return;
+
+            State.OverTimeSource = __instance;
+            if (Plugin.Enabled.Value) PayOverTime(__instance, dt);
         }
 
         private static void Finalizer(SE_Stats __state) => State.OverTimeSource = __state;
+
+        private static void PayOverTime(SE_Stats se, float dt)
+        {
+            // Ticks > 0 only when Setup found a health-over-time payout; we never decrement it.
+            if (se.m_healthOverTimeTicks <= 0f || se.m_healthOverTimeDuration <= 0f) return;
+
+            // Vanilla's lump fires once the timer passes the interval; restarting it every frame
+            // means it never does. Switching the mod off mid-effect lets vanilla resume lumps at
+            // the same rate for whatever lifetime is left.
+            se.m_healthOverTimeTimer = 0f;
+
+            // m_time is the elapsed time BEFORE this frame; base.UpdateStatusEffect advances it.
+            var share = RegenMath.OverTimeShare(se.m_healthOverTime, se.m_healthOverTimeDuration, se.m_time, dt);
+            if (share <= 0f) return;
+
+            State.OverTimeEarned += share;
+        }
     }
 
     /// <summary>
@@ -154,16 +180,11 @@ namespace SmoothRegen
         }
 
         /// <summary>
-        /// Seconds until this effect's next heal. An effect can in principle carry both a
-        /// health-over-time payout and a per-tick one; they are indistinguishable from inside the
-        /// Heal prefix, so the over-time interval wins. Worst case is one lump spread over the
-        /// other's interval, never a lost or an extra hp.
+        /// Seconds until this effect's next m_healthPerTick heal. Health-over-time lumps never get
+        /// here while the mod is on: UpdateStatusEffectPatch pays them itself and stops the lump.
         /// </summary>
-        private static float Interval(SE_Stats se)
-        {
-            if (se.m_healthOverTime > 0f && se.m_healthOverTimeInterval > 0f) return se.m_healthOverTimeInterval;
-            return se.m_tickInterval > 0f ? se.m_tickInterval : RegenBuffer.VanillaTickPeriod;
-        }
+        private static float Interval(SE_Stats se) =>
+            se.m_tickInterval > 0f ? se.m_tickInterval : RegenBuffer.VanillaTickPeriod;
     }
 
     // Player has both UpdateStats() and UpdateStats(float); name alone is ambiguous.
@@ -198,9 +219,14 @@ namespace SmoothRegen
             chunk += State.OverTime.Take(dt);
             chunk += State.UpFront.Take(dt);
 
+            // A mead still running earned a share this frame; only once it stops is nothing owed.
+            var meadRunning = State.OverTimeEarned > 0f;
+            chunk += State.OverTimeEarned;
+            State.OverTimeEarned = 0f;
+
             // Whole +1 hp steps, not a sliver per frame: rate R hp/s = R one-hp heals per second.
             // Flush the sub-1 rest once nothing more is owed, so the total still matches vanilla.
-            var drained = State.Food.Pending <= 0f && State.OverTime.Pending <= 0f && State.UpFront.Pending <= 0f;
+            var drained = !meadRunning && State.Food.Pending <= 0f && State.OverTime.Pending <= 0f && State.UpFront.Pending <= 0f;
             chunk = State.Payout.Pay(chunk, drained);
 
             // (Heal() is also an RPC when we are not the owner - no point calling it for nothing.)
@@ -230,7 +256,16 @@ namespace SmoothRegen
     {
         private static void Postfix(Player __instance)
         {
-            if (__instance == Player.m_localPlayer) State.Clear();
+            if (__instance != Player.m_localPlayer) return;
+            State.Clear();
+
+            // A fresh Player starts m_foodRegenTimer at 0 and heals only once it reaches 10 s
+            // (Player.cs:2449-2465), and the buffer only fills from that heal - so after spawning
+            // or loading a world nothing flowed for 10 s. Due the tick now: it fires on the first
+            // UpdateFood, its amount (every mod's bonus included) is spread over the next window,
+            // and each later tick keeps paying the following one. Ticks run one period early
+            // from here on, i.e. the smoothing leads vanilla instead of lagging it.
+            if (Plugin.Enabled.Value) __instance.m_foodRegenTimer = RegenBuffer.VanillaTickPeriod;
         }
     }
 

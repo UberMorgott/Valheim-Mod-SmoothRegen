@@ -92,6 +92,18 @@ That second buffer is constructed with `boundToOneTick: false`:
 Tests: `UnboundBufferKeepsConcurrentEffectsWhole`,
 `UnboundBufferTakesAWindowLongerThanATick`.
 
+**Superseded for `m_healthOverTime`:** buffering its lumps still waited one interval (5 s)
+for the first lump. `UpdateStatusEffectPatch` now pays `m_healthOverTime /
+m_healthOverTimeDuration` per game second from the drink (`RegenMath.OverTimeShare`, cut off
+at the duration) and restarts `m_healthOverTimeTimer` every step so vanilla's lump never
+fires. Only `m_healthPerTick` lumps still go through the buffer above.
+Test: `MeadLumpsLandAsWholeHpStepsAndTotalVanilla`.
+
+**World join:** a fresh Player's `m_foodRegenTimer` is 0, so the first food tick - and with
+it the first smoothed hp - came 10 s after spawn. `OnSpawnedPatch` sets it to 10 so the tick
+fires on the first `UpdateFood`; smoothing then leads vanilla by one period instead of
+lagging it. Test: `FoodPaysFromTheFirstFrameAfterSpawn`.
+
 `m_healthUpFront` is applied from `StartupEffects` (`SE_Stats.cs:182-187`), called from
 `Setup` and `ResetTime`, outside `UpdateStatusEffect`. It is meant to be instant (Epic
 Loot's instant mead moves a mead's whole over-time heal into it), so a prefix/finalizer on
@@ -102,9 +114,11 @@ at most one second of lag.
 
 Every buffer's per-frame share goes through `WholeHpPayout` before `Heal`: fractions are
 carried and only whole hp are healed, so a rate of R hp/s lands as R one-hp heals per
-second (capped by the 50 Hz `FixedUpdate` that drives `UpdateStats`: 100 hp/s = 2 hp per
-step). When every buffer is empty the sub-1 rest is flushed, so totals still match.
-Tests: `MeadLumpsLandAsWholeHpStepsAndTotalVanilla`, `PayoutFlushesTheFractionalRest`.
+second. Shares are earned per game second (`dt`), so tick i of A hp over T s is due at
+`i*T/A` regardless of step rate; every tick due by a step is paid in that step (100 hp/s at
+the 50 Hz `FixedUpdate` = 2 hp per step). When nothing more is owed the sub-1 rest is
+flushed, so totals still match. Tests: `TickCountFollowsGameTimeNotStepRate`,
+`PayoutFlushesTheFractionalRest`.
 
 ### The lag, and InstantFraction
 
