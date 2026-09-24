@@ -94,4 +94,40 @@ namespace SmoothRegen
             _rate = 0f;
         }
     }
+
+    /// <summary>
+    /// Turns the fractional hp the buffers earn each frame into whole +1 hp steps, so a rate of
+    /// R hp/s lands as R one-hp heals per second. What is earned but not yet a whole hp is carried,
+    /// and flushed once nothing more is coming, so the total still equals what went in.
+    /// </summary>
+    public sealed class WholeHpPayout
+    {
+        // Float sums of per-frame shares land a hair under the integer they add up to.
+        private const float Epsilon = 1e-4f;
+
+        private float _carry;
+
+        public float Carry => _carry;
+
+        /// <param name="earned">Hp earned this frame.</param>
+        /// <param name="flush">True when every buffer is empty: pay the fractional rest too.</param>
+        /// <returns>Hp to heal now: a whole number, or the final remainder on a flush.</returns>
+        public float Pay(float earned, bool flush)
+        {
+            if (earned > 0f) _carry += earned;
+            if (_carry <= Epsilon)
+            {
+                if (flush) _carry = 0f;
+                return 0f;
+            }
+
+            var paid = flush ? _carry : (float)Math.Floor(_carry + Epsilon);
+            // Subtract rather than zero: a whole step taken from 0.99995 leaves -0.00005, which the
+            // next share absorbs instead of being handed out twice.
+            _carry -= paid;
+            return paid;
+        }
+
+        public void Clear() => _carry = 0f;
+    }
 }

@@ -55,8 +55,8 @@ Hook `Player.UpdateFood`:
   than clear-to-false: the prefix only raises the flag for the local player,
   so an unconditional clear would be asymmetric, and a nested `UpdateFood`
   would end the outer tick's window early. Vanilla never nests it.
-- A `Player.UpdateStats` postfix drains the buffer, paying out
-  `buffered * dt / SmoothingWindow` per frame and healing that amount directly.
+- A `Player.UpdateStats` postfix drains the buffer, earning
+  `buffered * dt / SmoothingWindow` per frame and healing it in whole hp (see below).
 
 Only the timing changes. The amount is whatever the game produced, so every
 other mod's contribution is preserved verbatim.
@@ -92,9 +92,19 @@ That second buffer is constructed with `boundToOneTick: false`:
 Tests: `UnboundBufferKeepsConcurrentEffectsWhole`,
 `UnboundBufferTakesAWindowLongerThanATick`.
 
-Not covered: `m_healthUpFront`, applied from `StartupEffects` (`SE_Stats.cs:182-187`)
-outside `UpdateStatusEffect`. It is the deliberately instant part of an effect and stays
-instant.
+`m_healthUpFront` is applied from `StartupEffects` (`SE_Stats.cs:182-187`), called from
+`Setup` and `ResetTime`, outside `UpdateStatusEffect`. It is meant to be instant (Epic
+Loot's instant mead moves a mead's whole over-time heal into it), so a prefix/finalizer on
+`StartupEffects` diverts it into a third unbound buffer spread over a fixed 1 s: no jump,
+at most one second of lag.
+
+### Whole +1 hp steps
+
+Every buffer's per-frame share goes through `WholeHpPayout` before `Heal`: fractions are
+carried and only whole hp are healed, so a rate of R hp/s lands as R one-hp heals per
+second (capped by the 50 Hz `FixedUpdate` that drives `UpdateStats`: 100 hp/s = 2 hp per
+step). When every buffer is empty the sub-1 rest is flushed, so totals still match.
+Tests: `MeadLumpsLandAsWholeHpStepsAndTotalVanilla`, `PayoutFlushesTheFractionalRest`.
 
 ### The lag, and InstantFraction
 

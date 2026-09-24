@@ -28,6 +28,8 @@ namespace SmoothRegen.Tests
             UnboundBufferKeepsConcurrentEffectsWhole();
             UnboundBufferTakesAWindowLongerThanATick();
             RandomChurnKeepsEveryInvariant();
+            MeadLumpsLandAsWholeHpStepsAndTotalVanilla();
+            PayoutFlushesTheFractionalRest();
 
             if (_failures == 0)
             {
@@ -37,6 +39,49 @@ namespace SmoothRegen.Tests
 
             Console.WriteLine($"{_failures} check(s) FAILED");
             return 1;
+        }
+
+        // A minor healing mead: 50 hp over 10 s in two 25 hp lumps every 5 s (SE_Stats.cs:168-169).
+        // At 50 Hz fixed steps each heal must be exactly 1 hp, 5 per second, 50 in total.
+        private static void MeadLumpsLandAsWholeHpStepsAndTotalVanilla()
+        {
+            var buffer = new RegenBuffer(boundToOneTick: false);
+            var payout = new WholeHpPayout();
+            const float dt = 0.02f;
+            float total = 0f;
+            int heals = 0;
+            int healsInFirstSecond = 0;
+
+            for (int step = 0; step < 1000; step++)
+            {
+                if (step == 0 || step == 250) buffer.Add(25f, 5f);
+                var paid = payout.Pay(buffer.Take(dt), buffer.Pending <= 0f);
+                if (paid <= 0f) continue;
+
+                if (Math.Abs(paid - 1f) > 0.001f) Fail($"mead heal step {step} was {paid}, expected +1");
+                total += paid;
+                heals++;
+                if (step < 50) healsInFirstSecond++;
+            }
+
+            Near("mead total", total, 50f);
+            if (heals != 50) Fail($"expected 50 one-hp heals, got {heals}");
+            if (healsInFirstSecond != 5) Fail($"expected 5 heals in the first second, got {healsInFirstSecond}");
+        }
+
+        // A lump that is not a whole number still pays out in full: the rest comes as one last step.
+        private static void PayoutFlushesTheFractionalRest()
+        {
+            var buffer = new RegenBuffer(boundToOneTick: false);
+            var payout = new WholeHpPayout();
+            buffer.Add(7.3f, 1f);
+
+            float total = 0f;
+            for (int step = 0; step < 100; step++)
+                total += payout.Pay(buffer.Take(0.02f), buffer.Pending <= 0f);
+
+            Near("fractional lump total", total, 7.3f);
+            Near("nothing carried", payout.Carry, 0f);
         }
 
         // A single 20 hp tick, drained frame by frame, must total 20 hp.

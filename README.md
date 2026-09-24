@@ -14,7 +14,9 @@ SmoothRegen catches those lumps and pays out the exact same amount continuously
 over the following seconds. The health bar climbs instead of stepping. Food ticks
 are spread over `SmoothingWindow`; a status effect's lump is spread over that
 effect's own interval, so it finishes exactly as the next lump arrives and the
-mead's total and duration are untouched.
+mead's total and duration are untouched. Up-front (instant) effect heals are
+spread over one second. Healing always lands in +1 hp steps: 5 hp/s is five
+one-point heals per second.
 
 **Total healing per minute is identical to vanilla.** This is a feel change,
 not a buff. If you ever measure a difference in total healing, that is a bug,

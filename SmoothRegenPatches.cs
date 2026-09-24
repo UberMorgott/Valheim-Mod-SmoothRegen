@@ -24,8 +24,23 @@ namespace SmoothRegen
         /// <summary>Health-over-time status effects: healing meads, per-tick healing effects.</summary>
         internal static readonly RegenBuffer OverTime = new RegenBuffer(boundToOneTick: false);
 
+        /// <summary>Up-front heals of status effects (m_healthUpFront, e.g. Epic Loot's instant mead).</summary>
+        internal static readonly RegenBuffer UpFront = new RegenBuffer(boundToOneTick: false);
+
+        /// <summary>Everything the buffers pay out goes through here, so it lands as +1 hp steps.</summary>
+        internal static readonly WholeHpPayout Payout = new WholeHpPayout();
+
+        /// <summary>
+        /// Seconds an up-front heal is spread over. Short on purpose: it is meant to be instant, so
+        /// it only loses the jump, e.g. 50 hp arrives as 50 one-hp steps within a second.
+        /// </summary>
+        internal const float UpFrontWindow = 1f;
+
         /// <summary>True while the game is inside the food regen tick.</summary>
         internal static bool InFoodTick;
+
+        /// <summary>True while a status effect applies its up-front heal.</summary>
+        internal static bool InUpFront;
 
         /// <summary>The status effect being updated, while the game is inside its update.</summary>
         internal static SE_Stats OverTimeSource;
@@ -37,6 +52,8 @@ namespace SmoothRegen
         {
             Food.Clear();
             OverTime.Clear();
+            UpFront.Clear();
+            Payout.Clear();
         }
     }
 
@@ -76,6 +93,24 @@ namespace SmoothRegen
         private static void Finalizer(SE_Stats __state) => State.OverTimeSource = __state;
     }
 
+    /// <summary>
+    /// SE_Stats.StartupEffects heals m_healthUpFront in one call (SE_Stats.cs:184-187), from Setup
+    /// when the effect is added and from ResetTime when it is re-applied - outside
+    /// UpdateStatusEffect, so the patch above never sees it.
+    /// </summary>
+    [HarmonyPatch(typeof(SE_Stats), nameof(SE_Stats.StartupEffects))]
+    internal static class StartupEffectsPatch
+    {
+        private static void Prefix(SE_Stats __instance, out bool __state)
+        {
+            __state = State.InUpFront;
+            if (__instance.m_character != null && __instance.m_character == Player.m_localPlayer)
+                State.InUpFront = true;
+        }
+
+        private static void Finalizer(bool __state) => State.InUpFront = __state;
+    }
+
     [HarmonyPatch(typeof(Character), nameof(Character.Heal))]
     internal static class HealPatch
     {
@@ -92,6 +127,11 @@ namespace SmoothRegen
             {
                 buffer = State.Food;
                 window = Plugin.Window.Value;
+            }
+            else if (State.InUpFront)
+            {
+                buffer = State.UpFront;
+                window = State.UpFrontWindow;
             }
             else if (State.OverTimeSource != null)
             {
@@ -156,6 +196,12 @@ namespace SmoothRegen
             // its own schedule and lets RPC_Heal clamp the excess away, so holding one back would
             // hand the player healing vanilla never gave.
             chunk += State.OverTime.Take(dt);
+            chunk += State.UpFront.Take(dt);
+
+            // Whole +1 hp steps, not a sliver per frame: rate R hp/s = R one-hp heals per second.
+            // Flush the sub-1 rest once nothing more is owed, so the total still matches vanilla.
+            var drained = State.Food.Pending <= 0f && State.OverTime.Pending <= 0f && State.UpFront.Pending <= 0f;
+            chunk = State.Payout.Pay(chunk, drained);
 
             // (Heal() is also an RPC when we are not the owner - no point calling it for nothing.)
             if (chunk <= 0f) return;
