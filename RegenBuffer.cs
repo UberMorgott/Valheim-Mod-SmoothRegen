@@ -98,6 +98,15 @@ namespace SmoothRegen
     public static class RegenMath
     {
         /// <summary>
+        /// GuiBar.SetValue restarts m_changeDelay on every rise of a smooth-fill bar and the bar
+        /// only moves once that delay runs out (GuiBar.cs:73-76, 96-115). A +1 hp heal every
+        /// fraction of a second keeps restarting it, so the HP bar froze until healing stopped.
+        /// True = this SetValue is a rise that must not restart the delay (value stored directly).
+        /// </summary>
+        public static bool FillSkipsDelay(bool firstSet, float current, float value) =>
+            !firstSet && value > current;
+
+        /// <summary>
         /// Health a <paramref name="total"/>-over-<paramref name="duration"/> effect earns in the
         /// step from <paramref name="elapsed"/> to elapsed + <paramref name="dt"/> game seconds:
         /// its constant rate, cut off at the end of the duration, so the shares sum to the total.

@@ -110,6 +110,16 @@ Loot's instant mead moves a mead's whole over-time heal into it), so a prefix/fi
 `StartupEffects` diverts it into a third unbound buffer spread over a fixed 1 s: no jump,
 at most one second of lag.
 
+### HP bar
+
+The HUD HP bars are `GuiBar`s: `SetValue` restarts `m_changeDelay` on every rise of a
+smooth-fill bar and `LateUpdate` moves the bar only once it runs out (`GuiBar.cs:73-76,
+96-115`; vanilla fill bar: `m_smoothFill 1`, `m_changeDelay 0.5`). Vanilla heals every 10 s
+so the delay expires; +1 hp steps arrive faster, so the bar froze while healing and jumped
+when healing stopped (the number, set directly by `Hud.UpdateHealth`, was fine).
+`HealthBarFillPatch` makes a rise on the two HP bars update the target without restarting
+the delay. Test: `HealthBarFollowsSmallHeals` (replica of GuiBar's logic).
+
 ### Whole +1 hp steps
 
 Every buffer's per-frame share goes through `WholeHpPayout` before `Heal`: fractions are

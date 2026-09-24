@@ -31,6 +31,7 @@ namespace SmoothRegen.Tests
             MeadLumpsLandAsWholeHpStepsAndTotalVanilla();
             TickCountFollowsGameTimeNotStepRate();
             FoodPaysFromTheFirstFrameAfterSpawn();
+            HealthBarFollowsSmallHeals();
             PayoutFlushesTheFractionalRest();
 
             if (_failures == 0)
@@ -92,6 +93,43 @@ namespace SmoothRegen.Tests
                 var due = (float)Math.Floor(elapsed * 5f + 1e-3f);
                 Near($"hp paid after {elapsed}s at dt {dt}", total, due);
             }
+        }
+
+        // Replica of GuiBar.SetValue/LateUpdate (assembly_guiutils GuiBar.cs:57-79, 96-115), smooth
+        // fill with a change delay, fed the HP a mead gives: +1 every 0.2 s from 50 to 100.
+        // Vanilla rules keep restarting the delay, so the bar stays at 50 until healing stops -
+        // the in-game bug. With FillSkipsDelay the bar tracks the hp while the mead runs.
+        private static void HealthBarFollowsSmallHeals()
+        {
+            Near("vanilla bar frozen mid-mead", BarAfterMead(patched: false, at: 5f), 0.5f);
+            var patched = BarAfterMead(patched: true, at: 5f);
+            if (patched < 0.7f) Fail($"patched bar at 5s of the mead shows {patched}, expected ~0.75");
+        }
+
+        private static float BarAfterMead(bool patched, float at)
+        {
+            const float max = 100f, changeDelay = 1f, smoothSpeed = 1f, frame = 1f / 60f;
+            float value = 50f, smooth = 0.5f, delayTimer = 0f, hp = 50f, nextHeal = 0.2f;
+            for (float t = 0f; t < at; t += frame)
+            {
+                if (t >= nextHeal && hp < max) { hp += 1f; nextHeal += 0.2f; }
+
+                // SetValue(hp), every frame from Hud.UpdateHealth.
+                if (hp != value)
+                {
+                    if (!(patched && RegenMath.FillSkipsDelay(false, value, hp)) && hp > value) delayTimer = changeDelay;
+                    value = hp;
+                }
+
+                // LateUpdate.
+                delayTimer -= frame;
+                if (delayTimer <= 0f)
+                {
+                    var target = value / max;
+                    smooth = target > smooth ? Math.Min(target, smooth + smoothSpeed * frame) : target;
+                }
+            }
+            return smooth;
         }
 
         // World join: the food tick is due on the first frame, so +1 hp steps start at once.

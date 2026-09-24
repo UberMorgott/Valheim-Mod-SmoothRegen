@@ -187,6 +187,30 @@ namespace SmoothRegen
             se.m_tickInterval > 0f ? se.m_tickInterval : RegenBuffer.VanillaTickPeriod;
     }
 
+    /// <summary>
+    /// The HUD HP bars are GuiBars with a change delay: every rise restarts m_changeDelay and the
+    /// bar does not move until it runs out (GuiBar.cs:73-76, 96-115). Vanilla heals every 10 s, so
+    /// the delay always expires; our +1 hp steps arrive faster than it, so the bar froze while
+    /// healing and jumped once it stopped (numbers, set every frame by Hud.UpdateHealth,
+    /// Hud.cs:1081-1091, were fine). For the two HP bars a rise just updates the target and leaves
+    /// any running delay (a damage trail) alone; drains keep vanilla behaviour.
+    /// </summary>
+    [HarmonyPatch(typeof(GuiBar), nameof(GuiBar.SetValue))]
+    internal static class HealthBarFillPatch
+    {
+        private static bool Prefix(GuiBar __instance, float value)
+        {
+            if (!Plugin.Enabled.Value) return true;
+            if (!RegenMath.FillSkipsDelay(__instance.m_firstSet, __instance.m_value, value)) return true;
+
+            var hud = Hud.instance;
+            if (hud == null || (__instance != hud.m_healthBarFast && __instance != hud.m_healthBarSlow)) return true;
+
+            __instance.m_value = value;
+            return false;
+        }
+    }
+
     // Player has both UpdateStats() and UpdateStats(float); name alone is ambiguous.
     [HarmonyPatch(typeof(Player), nameof(Player.UpdateStats), new[] { typeof(float) })]
     internal static class UpdateStatsPatch
