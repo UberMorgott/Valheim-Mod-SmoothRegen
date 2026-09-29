@@ -10,7 +10,7 @@ namespace SmoothRegen
     {
         public const string PluginGuid = "morgott.valheim.smoothregen";
         public const string PluginName = "SmoothRegen";
-        public const string PluginVersion = "1.0.0";
+        public const string PluginVersion = "1.0.1";
 
         internal static ConfigEntry<bool> Enabled;
         internal static ConfigEntry<float> Window;
