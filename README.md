@@ -18,6 +18,11 @@ spread over one second. Healing always lands in +1 hp steps: 5 hp/s is five
 one-point heals per second. Meads start healing the moment you drink them, and
 food regen starts the moment you enter the world.
 
+Damage over time gets the same treatment: burning, spirit fire, poison and smoke
+drain in -1 hp steps across each tick instead of one chunk per tick. Damage numbers,
+resistances, totals and death stay vanilla - a tick that would kill you still kills you
+on the spot. While you regenerate and burn at once, the bar moves at one net rate.
+
 **Total healing per minute is identical to vanilla.** This is a feel change,
 not a buff. If you ever measure a difference in total healing, that is a bug,
 please report it.
@@ -32,6 +37,7 @@ first launch.
 | `Enabled` | `true` | on / off | Turn smoothing off without removing the DLL. Vanilla behaviour returns immediately. |
 | `SmoothingWindow` | `10` | 0.5 - 10 seconds | How long each food tick is spread over. Status-effect lumps use the effect's own interval instead. |
 | `InstantFraction` | `0` | 0.0 - 1.0 | Share of each lump applied immediately; the rest is spread over the window. |
+| `SmoothDamageOverTime` | `true` | on / off | Spread burning, spirit, poison and smoke damage over each tick interval. |
 
 `SmoothingWindow` at the default of 10 seconds matches the vanilla tick period,
 so healing becomes an even trickle: one tick is handed over precisely as the next

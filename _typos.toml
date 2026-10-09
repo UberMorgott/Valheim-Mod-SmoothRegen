@@ -1,0 +1,3 @@
+[default.extend-identifiers]
+# Valheim's own field name (Game.m_localDamgeTakenRate), cited in SPEC.md
+m_localDamgeTakenRate = "m_localDamgeTakenRate"

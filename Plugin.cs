@@ -15,6 +15,7 @@ namespace SmoothRegen
         internal static ConfigEntry<bool> Enabled;
         internal static ConfigEntry<float> Window;
         internal static ConfigEntry<float> InstantFraction;
+        internal static ConfigEntry<bool> SmoothDot;
 
         private Harmony _harmony;
 
@@ -41,6 +42,12 @@ namespace SmoothRegen
                     "any value.",
                     new AcceptableValueRange<float>(0f, 1f)));
 
+            SmoothDot = Config.Bind("General", "SmoothDamageOverTime", true,
+                "Spread burning, spirit, poison and smoke damage over each effect's tick interval " +
+                "instead of losing it in one chunk per tick. Damage numbers, resistances, kill " +
+                "credit and total damage stay vanilla; a tick that would kill you lands at once. " +
+                "The health bar shows regen minus damage as one rate. Needs Enabled.");
+
             _harmony = new Harmony(PluginGuid);
             _harmony.PatchAll();
 
@@ -49,6 +56,8 @@ namespace SmoothRegen
 
         private void OnDestroy()
         {
+            // Owed damage-over-time is paid before unloading, never forgiven.
+            if (Player.m_localPlayer != null) State.SettleDot(Player.m_localPlayer);
             _harmony?.UnpatchSelf();
             State.Clear();
         }

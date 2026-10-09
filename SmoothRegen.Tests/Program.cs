@@ -33,6 +33,13 @@ namespace SmoothRegen.Tests
             FoodPaysFromTheFirstFrameAfterSpawn();
             HealthBarFollowsSmallHeals();
             PayoutFlushesTheFractionalRest();
+            BurnTicksDrainAsWholeHpStepsAndTotalVanilla();
+            RegenAndDotNetIntoOneRate();
+            LethalDotTickLandsAtOnce();
+            DebtSettlesWithoutTouchingHealCarry();
+            HealthBarTrailFollowsDotDrain();
+            OverlappingDotTicksKeepTheirDeadlines();
+            ClampsTakeOnlyWhatVanillaWouldNotHaveLost();
 
             if (_failures == 0)
             {
@@ -542,6 +549,138 @@ namespace SmoothRegen.Tests
         {
             if (Math.Abs(actual - expected) > 0.001f)
                 Churn(step, seed, $"{what} (got {actual}, expected {expected})");
+        }
+
+        // A burn: 5 vanilla ticks of 3.7 hp, one per second (SE_Burning, m_damageInterval 1). Each
+        // tick's loss is banked over the interval and paid as -1 hp steps; the total is vanilla's.
+        private static void BurnTicksDrainAsWholeHpStepsAndTotalVanilla()
+        {
+            var dot = new PortionBuffer();
+            var payout = new WholeHpPayout();
+            const float dt = 0.02f, perTick = 3.7f;
+            float total = 0f, biggest = 0f, timer = 0f;
+            int ticks = 0, steps = 0;
+
+            for (int step = 0; step < 400; step++)
+            {
+                timer -= dt;
+                if (timer <= 0f && ticks < 5)
+                {
+                    timer = 1f;
+                    ticks++;
+                    dot.Add(perTick, 1f);
+                }
+
+                var paid = payout.Pay(-dot.Take(dt), dot.Pending <= 0f && ticks >= 5);
+                if (paid > 0f) Fail($"burn healed {paid}");
+                if (paid < 0f)
+                {
+                    steps++;
+                    total -= paid;
+                    if (dot.Pending > 0f) biggest = Math.Max(biggest, -paid);
+                }
+            }
+
+            Near("burn total", total, 5 * perTick);
+            Near("burn biggest step while draining", biggest, 1f);
+            if (steps < 18) Fail($"burn paid in {steps} steps, expected ~18 one-hp steps");
+        }
+
+        // A mead heals 2 hp/s while a burn takes 5 hp/s: the bar must only go down, 3 hp/s.
+        private static void RegenAndDotNetIntoOneRate()
+        {
+            var payout = new WholeHpPayout();
+            const float dt = 0.02f;
+            float net = 0f;
+            for (int step = 0; step < 150; step++) // 3 s
+            {
+                var paid = payout.Pay(2f * dt - 5f * dt, false);
+                if (paid > 0f) Fail($"net DoT step healed {paid}");
+                if (paid != 0f && Math.Abs(paid) != 1f) Fail($"net step {paid} is not a whole hp");
+                net += paid;
+            }
+            net += payout.Pay(0f, true);
+            Near("net regen - dot over 3 s", net, -9f, 0.01f);
+        }
+
+        private static void LethalDotTickLandsAtOnce()
+        {
+            // 10 hp, 4 owed, a 3 hp tick: vanilla is at 3, survives -> defer.
+            if (RegenMath.LethalDotHealth(10f, 4f, 3f, false).HasValue) Fail("non-lethal DoT tick was not deferred");
+            // 10 hp, 4 owed, a 6 hp tick: vanilla reaches 0 now -> write 0 now.
+            var lethal = RegenMath.LethalDotHealth(10f, 4f, 6f, false);
+            if (!lethal.HasValue) Fail("lethal DoT tick was deferred");
+            else Near("lethal DoT health", lethal.Value, 0f);
+            // God mode keeps 1 hp like ApplyDamage.
+            var god = RegenMath.LethalDotHealth(10f, 8f, 6f, true);
+            if (!god.HasValue) Fail("god-mode lethal DoT tick was deferred");
+            else Near("god-mode DoT health", god.Value, 1f);
+        }
+
+        private static void DebtSettlesWithoutTouchingHealCarry()
+        {
+            var payout = new WholeHpPayout();
+            payout.Pay(-0.6f, false);
+            Near("debt", payout.TakeDebt(), 0.6f);
+            Near("carry after debt", payout.Carry, 0f);
+
+            payout.Pay(0.4f, false);
+            Near("no debt from a heal carry", payout.TakeDebt(), 0f);
+            Near("heal carry kept", payout.Carry, 0.4f);
+        }
+
+        // GuiBar.SetValue restarts the trail delay on every smooth drain (GuiBar.cs:73-76); -1 hp steps
+        // must not, or the trail freezes for the whole burn. A real hit (not DoT) keeps the delay.
+        private static void HealthBarTrailFollowsDotDrain()
+        {
+            if (!RegenMath.BarSkipsDelay(false, 50f, 49f, true)) Fail("DoT drain restarted the bar delay");
+            if (RegenMath.BarSkipsDelay(false, 50f, 30f, false)) Fail("a real hit skipped the bar delay");
+            if (!RegenMath.BarSkipsDelay(false, 50f, 51f, false)) Fail("a heal restarted the bar delay");
+            if (RegenMath.BarSkipsDelay(true, 50f, 49f, true)) Fail("first set skipped vanilla init");
+        }
+
+        // Two 10 hp ticks 0.5 s apart, 1 s window each: the first is fully paid by t = 1 s, the second by 1.5 s.
+        // A merged pool re-spread at 0.5 s would still owe part of the first at its deadline.
+        private static void OverlappingDotTicksKeepTheirDeadlines()
+        {
+            var dot = new PortionBuffer();
+            const float dt = 0.01f;
+            float paid = 0f, at1 = -1f;
+            dot.Add(10f, 1f);
+            for (int step = 1; step <= 200; step++)
+            {
+                if (step == 50) dot.Add(10f, 1f);
+                paid += dot.Take(dt);
+                if (step == 100) at1 = paid;
+            }
+            // by 1 s: the whole first tick (10) + half the second (5)
+            Near("paid by the first deadline", at1, 15.1f, 0.02f); // the second tick took 51 steps of 0.01 s
+            Near("paid in total", paid, 20f, 0.01f);
+            Near("nothing left", dot.Pending, 0f, 0.001f);
+
+            dot.Add(4f, 1f);
+            dot.Add(3f, 1f);
+            Near("forgive", dot.Forgive(5f), 5f);
+            Near("left after forgive", dot.Pending, 2f);
+        }
+
+        private static void ClampsTakeOnlyWhatVanillaWouldNotHaveLost()
+        {
+            // 100 hp, 10 owed (vanilla at 90), max drops to 95: vanilla keeps 90, we drop to 95 -> owe 5.
+            Near("cap above vanilla", RegenMath.OwedAfterCap(100f, 10f, 95f), 5f);
+            // max drops to 80: vanilla 80, ours 80 -> owe nothing.
+            Near("cap below vanilla", RegenMath.OwedAfterCap(100f, 10f, 80f), 0f);
+            // at max 100 with 10 owed, a 10 hp heal is clamped away for us but heals vanilla 90 -> 100: owe 0.
+            Near("overheal pays debt", RegenMath.OwedAfterHeal(100f, 10f, 10f, 100f), 0f);
+            // 95/100, 10 owed, heal 3: no clamp -> still owe 10.
+            Near("heal under max keeps debt", RegenMath.OwedAfterHeal(95f, 10f, 3f, 100f), 10f);
+            // 95/100, 10 owed, heal 8: 3 clamped -> owe 7.
+            Near("partial overheal", RegenMath.OwedAfterHeal(95f, 10f, 8f, 100f), 7f);
+
+            var payout = new WholeHpPayout();
+            payout.Pay(-0.7f, false);
+            Near("forgive debt", payout.ForgiveDebt(0.5f), 0.5f);
+            Near("debt left", payout.Debt, 0.2f);
         }
 
         private static float DrainSeconds(RegenBuffer buffer, float seconds, float dt)

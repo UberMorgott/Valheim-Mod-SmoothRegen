@@ -120,6 +120,51 @@ when healing stopped (the number, set directly by `Hud.UpdateHealth`, was fine).
 `HealthBarFillPatch` makes a rise on the two HP bars update the target without restarting
 the delay. Test: `HealthBarFollowsSmallHeals` (replica of GuiBar's logic).
 
+### Damage over time (1.1.0)
+
+Vanilla periodic damage on the player, inventory (decompile 1.0.16 + live ObjectDB dump):
+
+| Source | Path | Interval | Smoothed |
+| --- | --- | --- | --- |
+| SE_Burning `Burning` (fire) | `ApplyDamage(hit, true, false)`, SE_Burning.cs:30-56 | 1 s | yes |
+| SE_Burning `Spirit` | same class | 0.5 s | yes |
+| SE_Poison | `ApplyDamage`, SE_Poison.cs:25-47 | 1 s | yes |
+| SE_Smoke `Smoked` (2 dmg) | `ApplyDamage`, SE_Smoke.cs:22-35 | 1 s | yes |
+| SE_Stats `Freezing` (-1 hp) / SE_Puke (-1 hp) | `m_healthPerTick < 0` -> `Character.Damage` (SE_Stats.cs:211-228) | 1 s / 2 s | no: RPC_Damage applies armor, not linear; already 1 hp |
+| SE_Wet `m_waterDamage` | `Character.Damage`, only `!m_tolerateWater` (not the player) | 0.5 s | no |
+| SE_Frost | slow only, no damage | - | n/a |
+| Bleeding | does not exist in vanilla (Warfare / MonsterModifiers add their own) | - | n/a |
+| Lava, Ashlands ocean, drowning | not status effects (Character.UpdateLava, Player drowning) | 1 s | no |
+
+The DoT tick's `ApplyDamage` runs in full - its damage number, player stats, `m_lastHit`, `OnDamaged`,
+`m_onDamaged` and every other mod's hooks see vanilla's hit once per tick. Only its health write is
+deferred: `SetHealthPatch` banks the loss (exactly vanilla's: past resistances, armor,
+`m_localDamgeTakenRate`, god clamp) into a `PortionBuffer`, each tick paid linearly over the effect's
+own `m_damageInterval`, so every tick is fully paid by its deadline. The payout is netted with the heal
+buffers in the signed `WholeHpPayout`: one rate, regen minus DoT, in whole 1 hp steps.
+
+Our health is above vanilla's by the debt (at most one interval of DoT). Every place that difference
+could change an outcome makes it vanilla again:
+
+- **Lethal tick:** if `health - owed - loss <= 0` the whole debt lands in that tick's own `SetHealth` -
+  death at vanilla's instant, from vanilla's hit (`RegenMath.LethalDotHealth`, god/ghost keep 1 hp).
+- **Any other damage** (`ApplyDamage` outside a DoT tick, incl. a hit nested in the tick's own call):
+  debt settled first, so the hit meets vanilla's health.
+- **Heal clamp:** a heal landing at max health while debt is owed would heal vanilla; the clamped part
+  pays off debt (`OwedAfterHeal`, owner-side `RPC_Heal`: local heals, our payouts and other players' heals). **Max health drop** (`SetMaxHealth` clamp): same (`OwedAfterCap`).
+- **Health-reading attacks** (blood magic cost, stamina return / damage per missing HP): debt settled in
+  `Attack.Start`, `Update` and `OnAttackTrigger` of such attacks.
+- **Save / logout / unload:** `Player.Save` and `Plugin.OnDestroy` settle the debt (saves write only current health).
+- **Switched off:** the debt is paid at once, never forfeited. Dead / downed: dropped. Not owner: kept, not drained.
+- **Payout reaching 0** (health lowered by a path we do not see): `m_lastHit` = the last DoT hit.
+
+HUD: a drop on the HP bars while DoT is owed skips the trail delay (`RegenMath.BarSkipsDelay`), so the
+trail follows the drain instead of freezing for the whole burn; other drops keep vanilla's trail.
+Accepted: `OnDamaged` / `m_onDamaged` callbacks of the tick read health before the deferred loss.
+Tests: `BurnTicksDrainAsWholeHpStepsAndTotalVanilla`, `RegenAndDotNetIntoOneRate`,
+`LethalDotTickLandsAtOnce`, `OverlappingDotTicksKeepTheirDeadlines`,
+`ClampsTakeOnlyWhatVanillaWouldNotHaveLost`, `HealthBarTrailFollowsDotDrain`; in game: `66d-smooth-dot`.
+
 ### Whole +1 hp steps
 
 Every buffer's per-frame share goes through `WholeHpPayout` before `Heal`: fractions are

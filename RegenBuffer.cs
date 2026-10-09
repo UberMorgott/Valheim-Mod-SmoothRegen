@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace SmoothRegen
 {
@@ -95,8 +96,102 @@ namespace SmoothRegen
         }
     }
 
+    /// <summary>
+    /// Damage-over-time loss owed, kept as separate portions, each paid linearly over its own
+    /// window: a tick is fully paid by its deadline (one interval after it fired), however other
+    /// ticks overlap it. A merged pool would re-stretch the rest of an earlier tick past its deadline.
+    /// </summary>
+    public sealed class PortionBuffer
+    {
+        private readonly List<float> _left = new List<float>();
+        private readonly List<float> _rate = new List<float>();
+
+        public float Pending { get; private set; }
+
+        public void Add(float amount, float window)
+        {
+            if (amount <= 0f) return;
+            if (window <= 0f) throw new ArgumentOutOfRangeException(nameof(window));
+            _left.Add(amount);
+            _rate.Add(amount / window);
+            Pending += amount;
+        }
+
+        /// <summary>The share earned by <paramref name="dt"/> seconds, summed over every portion.</summary>
+        public float Take(float dt)
+        {
+            if (Pending <= 0f || dt <= 0f) return 0f;
+            var taken = 0f;
+            for (var i = _left.Count - 1; i >= 0; i--)
+            {
+                var chunk = Math.Min(_left[i], _rate[i] * dt);
+                taken += chunk;
+                _left[i] -= chunk;
+                if (_left[i] <= 0f) Remove(i);
+            }
+            Pending = Math.Max(0f, Pending - taken);
+            if (_left.Count == 0) Pending = 0f;
+            return taken;
+        }
+
+        /// <summary>Drop up to <paramref name="amount"/> of what is owed, oldest portion first.</summary>
+        public float Forgive(float amount)
+        {
+            var forgiven = 0f;
+            while (amount > 0f && _left.Count > 0)
+            {
+                var chunk = Math.Min(_left[0], amount);
+                _left[0] -= chunk;
+                amount -= chunk;
+                forgiven += chunk;
+                if (_left[0] <= 0f) Remove(0);
+            }
+            Pending = _left.Count == 0 ? 0f : Math.Max(0f, Pending - forgiven);
+            return forgiven;
+        }
+
+        public void Clear()
+        {
+            _left.Clear();
+            _rate.Clear();
+            Pending = 0f;
+        }
+
+        private void Remove(int i)
+        {
+            _left.RemoveAt(i);
+            _rate.RemoveAt(i);
+        }
+    }
+
     public static class RegenMath
     {
+        /// <summary>
+        /// DoT owed after a clamp of health to <paramref name="cap"/> (Character.SetMaxHealth,
+        /// Character.cs:3057-3067, or a heal clamped by RPC_Heal at max health). Vanilla, having already
+        /// paid the debt, sits at <paramref name="health"/> - <paramref name="owed"/>: the clamp takes
+        /// from it only what is above the cap, so the debt shrinks by what our clamp took too much.
+        /// </summary>
+        public static float OwedAfterCap(float health, float owed, float cap)
+        {
+            if (owed <= 0f) return 0f;
+            var ours = Math.Min(health, cap);
+            var vanilla = Math.Min(health - owed, cap);
+            return Math.Max(0f, Math.Min(owed, ours - vanilla));
+        }
+
+        /// <summary>
+        /// DoT owed after a heal of <paramref name="hp"/> lands at <paramref name="health"/> under
+        /// <paramref name="max"/>. Vanilla heals from health - owed, so the part our heal loses to the
+        /// max-health clamp would have landed there: it pays off that much debt instead.
+        /// </summary>
+        public static float OwedAfterHeal(float health, float owed, float hp, float max)
+        {
+            if (owed <= 0f || hp <= 0f) return Math.Max(0f, owed);
+            var excess = health + hp - max;
+            return excess > 0f ? Math.Max(0f, owed - excess) : owed;
+        }
+
         /// <summary>
         /// GuiBar.SetValue restarts m_changeDelay on every rise of a smooth-fill bar and the bar
         /// only moves once that delay runs out (GuiBar.cs:73-76, 96-115). A +1 hp heal every
@@ -105,6 +200,30 @@ namespace SmoothRegen
         /// </summary>
         public static bool FillSkipsDelay(bool firstSet, float current, float value) =>
             !firstSet && value > current;
+
+        /// <summary>
+        /// Same for a drop while smoothed damage-over-time is being paid: -1 hp steps every fraction
+        /// of a second would keep restarting the trail bar's delay, so it froze at the pre-DoT value
+        /// and jumped once the burn ended. Other drops (a real hit) keep vanilla's delayed trail.
+        /// </summary>
+        public static bool BarSkipsDelay(bool firstSet, float current, float value, bool dotDraining) =>
+            FillSkipsDelay(firstSet, current, value) || (!firstSet && dotDraining && value < current);
+
+        /// <summary>
+        /// Health to write when a damage-over-time tick would take vanilla's health to
+        /// <paramref name="current"/> - <paramref name="owed"/> - <paramref name="loss"/>, or null to
+        /// defer the loss. Vanilla has already paid every earlier tick, so its health is lower than
+        /// ours by what is still owed; when that would be lethal the whole debt lands now, so death
+        /// comes at vanilla's instant from vanilla's hit. God / ghost mode keep 1 hp like
+        /// Character.ApplyDamage (Character.cs:2459-2462).
+        /// </summary>
+        public static float? LethalDotHealth(float current, float owed, float loss, bool godMode)
+        {
+            var vanilla = current - owed - loss;
+            if (vanilla > 0f) return null;
+            return godMode ? 1f : vanilla;
+        }
+
 
         /// <summary>
         /// Health a <paramref name="total"/>-over-<paramref name="duration"/> effect earns in the
@@ -120,9 +239,11 @@ namespace SmoothRegen
     }
 
     /// <summary>
-    /// Turns the fractional hp the buffers earn each frame into whole +1 hp steps, so a rate of
-    /// R hp/s lands as R one-hp heals per second. What is earned but not yet a whole hp is carried,
-    /// and flushed once nothing more is coming, so the total still equals what went in.
+    /// Turns the fractional hp the buffers earn each frame into whole 1 hp steps, so a rate of
+    /// R hp/s lands as R one-hp steps per second. The amount is signed: healing earned minus
+    /// damage-over-time owed, so regen and DoT net out into one rate instead of the bar bouncing
+    /// +1 / -1. What is earned but not yet a whole hp is carried, and flushed once nothing more is
+    /// coming, so the total still equals what went in.
     /// </summary>
     public sealed class WholeHpPayout
     {
@@ -133,23 +254,48 @@ namespace SmoothRegen
 
         public float Carry => _carry;
 
-        /// <param name="earned">Hp earned this frame.</param>
+        /// <summary>Damage earned but not yet paid (the negative part of the carry).</summary>
+        public float Debt => _carry < 0f ? -_carry : 0f;
+
+        /// <param name="earned">Net hp earned this frame: heal minus damage.</param>
         /// <param name="flush">True when every buffer is empty: pay the fractional rest too.</param>
-        /// <returns>Hp to heal now: a whole number, or the final remainder on a flush.</returns>
+        /// <returns>
+        /// Hp to apply now: a whole number (positive = heal, negative = damage), or the final
+        /// remainder on a flush.
+        /// </returns>
         public float Pay(float earned, bool flush)
         {
-            if (earned > 0f) _carry += earned;
-            if (_carry <= Epsilon)
+            _carry += earned;
+            if (Math.Abs(_carry) <= Epsilon)
             {
                 if (flush) _carry = 0f;
                 return 0f;
             }
 
-            var paid = flush ? _carry : (float)Math.Floor(_carry + Epsilon);
+            float paid;
+            if (flush) paid = _carry;
+            else if (_carry > 0f) paid = (float)Math.Floor(_carry + Epsilon);
+            else paid = -(float)Math.Floor(-_carry + Epsilon);
             // Subtract rather than zero: a whole step taken from 0.99995 leaves -0.00005, which the
             // next share absorbs instead of being handed out twice.
             _carry -= paid;
             return paid;
+        }
+
+        /// <summary>Hand over the unpaid damage (to settle it at once) and keep any unpaid heal.</summary>
+        public float TakeDebt()
+        {
+            var debt = Debt;
+            if (debt > 0f) _carry = 0f;
+            return debt;
+        }
+
+        /// <summary>Drop up to <paramref name="amount"/> of the unpaid damage; returns how much was dropped.</summary>
+        public float ForgiveDebt(float amount)
+        {
+            var dropped = Math.Min(Debt, Math.Max(0f, amount));
+            _carry += dropped;
+            return dropped;
         }
 
         public void Clear() => _carry = 0f;
