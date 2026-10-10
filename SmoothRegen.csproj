@@ -11,6 +11,10 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DebugType>portable</DebugType>
     <NoWarn>$(NoWarn);MSB3277</NoWarn>
+    <!-- SDK 8's in-box SourceLink embeds the git commit SHA in the PDB, which the deterministic
+         content id folds into the MVID/PE timestamp: every commit changed the DLL bytes. -->
+    <EnableSourceLink>false</EnableSourceLink>
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
   </PropertyGroup>
 
   <PropertyGroup>
