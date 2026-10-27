@@ -1,20 +1,21 @@
 <Project>
-  <!-- Valheim.Build v1 -->
+  <!-- Valheim.Build v2 -->
   <!--
     Canonical shared build settings for Valheim mod repos.
     Source of truth: UberMorgott/Valheim-Tools-Autotest, valbuild/Valheim.Build.props.
     Do NOT edit a repo's copy: change the canonical file, bump ValheimBuildVersion,
     then run `valbuild sync <repo>`. `valbuild check <repo>` (quality-gate) fails on drift.
 
-    Adoption: <repo>/build/Valheim.Build.props + <repo>/global.json (both written by valbuild sync),
+    Adoption: <repo>/build/{Valheim.Build.props, Polyfills.cs.txt} + <repo>/global.json (valbuild sync),
     imported first thing from <repo>/Directory.Build.props:
       <Import Project="$(MSBuildThisFileDirectory)build\Valheim.Build.props" />
 
     Layers:
       common (every project, incl. tests/tools): LangVersion, determinism, PathMap, embedded PDB,
-        no SourceLink, ValheimDir property set, pinned .NET Framework reference assemblies.
+        no SourceLink, ValheimDir property set; .NETFramework projects: pinned reference assemblies +
+        build/Polyfills.cs.txt (compiler attributes copied from dotnet/runtime; opt out ValheimPolyfills=false).
         TargetFramework stays in each csproj (plugins: net472).
-      plugin (csproj sets <ValheimPlugin>true</ValheimPlugin>): PolySharp, game BepInEx/0Harmony refs,
+      plugin (csproj sets <ValheimPlugin>true</ValheimPlugin>): game BepInEx/0Harmony refs,
         optional Jotunn and publicizer.
     Opt-in switches are read only by item conditions; items are evaluated after every property of
     the project (csproj included), so a switch set in the csproj body is honoured here.
@@ -22,7 +23,7 @@
   -->
 
   <PropertyGroup>
-    <ValheimBuildVersion>1</ValheimBuildVersion>
+    <ValheimBuildVersion>2</ValheimBuildVersion>
   </PropertyGroup>
 
   <!-- ===== common ===== -->
@@ -65,23 +66,25 @@
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
   </ItemGroup>
 
+  <!-- Compiler-required attributes the net472 reference set lacks (init, required, nullable flow,
+       CallerArgumentExpression, UnscopedRef): plain source, internal types, fixed order, so the
+       build stays byte-reproducible (a source generator's output order varied between cold builds).
+       Mono-unsupported features (ModuleInitializer, SkipLocalsInit, InlineArray, UnsafeAccessor) have
+       no polyfill on purpose; `valbuild check` also bans them in source. -->
+  <PropertyGroup>
+    <ValheimPolyfills Condition="'$(ValheimPolyfills)' == ''">true</ValheimPolyfills>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(TargetFrameworkIdentifier)' == '.NETFramework' And '$(ValheimPolyfills)' != 'false'">
+    <Compile Include="$(MSBuildThisFileDirectory)Polyfills.cs.txt" Link="Polyfills.cs" Visible="false" />
+  </ItemGroup>
+
   <!-- ===== plugin layer (csproj: <ValheimPlugin>true</ValheimPlugin>) ===== -->
   <PropertyGroup>
     <!-- Switch defaults; a csproj may override them in its own body. -->
     <ValheimBepInExRefs Condition="'$(ValheimBepInExRefs)' == ''">true</ValheimBepInExRefs>
     <ValheimUseJotunn Condition="'$(ValheimUseJotunn)' == ''">false</ValheimUseJotunn>
     <ValheimUsePublicizer Condition="'$(ValheimUsePublicizer)' == ''">false</ValheimUsePublicizer>
-
-    <!-- PolySharp: compile-time polyfills only. Runtime-supported attributes (UnsafeAccessor, InlineArray,
-         ...) are never generated; the features below need runtime support Unity Mono lacks, so their
-         attributes stay absent and code using them does not compile (CS0246). -->
-    <PolySharpIncludeRuntimeSupportedAttributes>false</PolySharpIncludeRuntimeSupportedAttributes>
-    <PolySharpExcludeGeneratedTypes>System.Runtime.CompilerServices.ModuleInitializerAttribute;System.Runtime.CompilerServices.SkipLocalsInitAttribute;System.Runtime.CompilerServices.InlineArrayAttribute;System.Runtime.CompilerServices.UnsafeAccessorAttribute;System.Runtime.CompilerServices.UnsafeAccessorKind;System.Runtime.CompilerServices.UnsafeAccessorTypeAttribute</PolySharpExcludeGeneratedTypes>
   </PropertyGroup>
-
-  <ItemGroup Condition="'$(ValheimPlugin)' == 'true'">
-    <PackageReference Include="PolySharp" Version="1.16.0" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
-  </ItemGroup>
 
   <!-- BepInEx + HarmonyX from the game's BepInEx\core: the exact runtime versions (0Harmony 2.9.0),
        not the BepInEx.Core/HarmonyX NuGet packages (HarmonyX NuGet 2.10.1 > runtime 2.9.0). -->
