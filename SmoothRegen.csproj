@@ -1,25 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- LangVersion, determinism, PathMap, embedded PDB, SourceLink off, ValheimDir/ManagedDir,
+       PolySharp and the game's BepInEx + 0Harmony references come from build\Valheim.Build.props. -->
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
+    <ValheimPlugin>true</ValheimPlugin>
+    <ValheimUsePublicizer>true</ValheimUsePublicizer>
     <AssemblyName>SmoothRegen</AssemblyName>
     <Product>SmoothRegen</Product>
     <Version>1.1.2</Version>
-    <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- Valheim ships its own copies; never emit ours next to the plugin. -->
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <DebugType>portable</DebugType>
     <NoWarn>$(NoWarn);MSB3277</NoWarn>
-    <!-- SDK 8's in-box SourceLink embeds the git commit SHA in the PDB, which the deterministic
-         content id folds into the MVID/PE timestamp: every commit changed the DLL bytes. -->
-    <EnableSourceLink>false</EnableSourceLink>
-    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
-  </PropertyGroup>
-
-  <PropertyGroup>
-    <ValheimDir>D:\Steam\steamapps\common\Valheim</ValheimDir>
-    <ManagedDir>$(ValheimDir)\Valheim_Data\Managed</ManagedDir>
   </PropertyGroup>
 
   <ItemGroup>
@@ -28,13 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="BepInEx.Core" Version="5.4.21" />
-    <PackageReference Include="HarmonyX" Version="2.10.1" />
     <!-- Game fields we need are private; publicize instead of reflecting. -->
-    <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.2" PrivateAssets="all" ExcludeAssets="runtime" />
-  </ItemGroup>
-
-  <ItemGroup>
     <Reference Include="assembly_valheim" Publicize="true">
       <HintPath>$(ManagedDir)\assembly_valheim.dll</HintPath>
       <Private>false</Private>
