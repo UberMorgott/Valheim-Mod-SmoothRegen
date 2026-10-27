@@ -2,6 +2,10 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <!-- xUnit v3 on Microsoft Testing Platform (build\Valheim.Build.props tests layer). IsTestProject here:
+         the props are evaluated before this body, and quality-gate runs dotnet test only for test projects. -->
+    <ValheimTests>true</ValheimTests>
+    <IsTestProject>true</IsTestProject>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>disable</Nullable>
     <AssemblyName>SmoothRegen.Tests</AssemblyName>

@@ -1,4 +1,9 @@
 using System;
+using System.Collections.Generic;
+using Xunit;
+
+// Checks share the static failure list: run them one at a time.
+[assembly: Xunit.v3.Parallelization(Mode = Xunit.Sdk.ParallelMode.None)]
 
 namespace SmoothRegen.Tests
 {
@@ -6,54 +11,23 @@ namespace SmoothRegen.Tests
     /// The whole point of SmoothRegen is that it changes WHEN healing arrives,
     /// never HOW MUCH. Every check here fails if that stops being true.
     /// </summary>
-    internal static class Program
+    public sealed class SmoothRegenChecks : IDisposable
     {
-        private static int _failures;
+        // One old console check = one [Fact]. Fail() keeps collecting like the old harness did (a check
+        // reports every failed assertion, not just the first); Dispose turns them into the test failure.
+        private static readonly List<string> Failures = new List<string>();
 
-        private static int Main()
+        public SmoothRegenChecks() => Failures.Clear();
+
+        public void Dispose()
         {
-            PaysOutExactlyWhatWentIn();
-            PaysOutOverTheWindowNotInstantly();
-            NeverOverdraws();
-            OverlappingTicksKeepTotal();
-            IgnoresNonPositiveInput();
-            ClearDropsPending();
-            SplitTickStillTotalsTheOriginal();
-            CapLimitsWhatIsBanked();
-            FullHealthDoesNotBankABurst();
-            DisableThenReenablePaysNothingStale();
-            FullHealthThenDamageStillPaysTheWholeTick();
-            LongWindowStillPaysEachTickWithinTheTickPeriod();
-            ASmallerTickDoesNotTruncateWhatIsAlreadyHeld();
-            UnboundBufferKeepsConcurrentEffectsWhole();
-            UnboundBufferTakesAWindowLongerThanATick();
-            RandomChurnKeepsEveryInvariant();
-            MeadLumpsLandAsWholeHpStepsAndTotalVanilla();
-            TickCountFollowsGameTimeNotStepRate();
-            FoodPaysFromTheFirstFrameAfterSpawn();
-            HealthBarFollowsSmallHeals();
-            PayoutFlushesTheFractionalRest();
-            BurnTicksDrainAsWholeHpStepsAndTotalVanilla();
-            RegenAndDotNetIntoOneRate();
-            LethalDotTickLandsAtOnce();
-            DebtSettlesWithoutTouchingHealCarry();
-            HealthBarTrailFollowsDotDrain();
-            OverlappingDotTicksKeepTheirDeadlines();
-            ClampsTakeOnlyWhatVanillaWouldNotHaveLost();
-
-            if (_failures == 0)
-            {
-                Console.WriteLine("all checks passed");
-                return 0;
-            }
-
-            Console.WriteLine($"{_failures} check(s) FAILED");
-            return 1;
+            if (Failures.Count > 0) Assert.Fail(string.Join(Environment.NewLine, Failures));
         }
 
         // A minor healing mead: 50 hp over 10 s (vanilla: two 25 hp lumps, the first at 5 s).
         // Paid from the drink: +1 hp steps, 5 in the first second, 50 in total, done by 10 s.
-        private static void MeadLumpsLandAsWholeHpStepsAndTotalVanilla()
+        [Fact]
+        public void MeadLumpsLandAsWholeHpStepsAndTotalVanilla()
         {
             var payout = new WholeHpPayout();
             const float dt = 0.02f;
@@ -86,7 +60,8 @@ namespace SmoothRegen.Tests
 
         // Due ticks follow game time, not the step rate: 5 hp/s pays 5 hp per game second whether
         // the game steps at 50 Hz or 7 Hz (several ticks due in one step are paid in that step).
-        private static void TickCountFollowsGameTimeNotStepRate()
+        [Fact]
+        public void TickCountFollowsGameTimeNotStepRate()
         {
             foreach (var dt in new[] { 0.02f, 1f / 7f, 0.5f })
             {
@@ -106,7 +81,8 @@ namespace SmoothRegen.Tests
         // fill with a change delay, fed the HP a mead gives: +1 every 0.2 s from 50 to 100.
         // Vanilla rules keep restarting the delay, so the bar stays at 50 until healing stops -
         // the in-game bug. With FillSkipsDelay the bar tracks the hp while the mead runs.
-        private static void HealthBarFollowsSmallHeals()
+        [Fact]
+        public void HealthBarFollowsSmallHeals()
         {
             Near("vanilla bar frozen mid-mead", BarAfterMead(patched: false, at: 5f), 0.5f);
             var patched = BarAfterMead(patched: true, at: 5f);
@@ -141,7 +117,8 @@ namespace SmoothRegen.Tests
 
         // World join: the food tick is due on the first frame, so +1 hp steps start at once.
         // 20 hp per 10 s tick = 2 hp/s: first heal within half a second, 20 by the window's end.
-        private static void FoodPaysFromTheFirstFrameAfterSpawn()
+        [Fact]
+        public void FoodPaysFromTheFirstFrameAfterSpawn()
         {
             var buffer = new RegenBuffer();
             var payout = new WholeHpPayout();
@@ -161,7 +138,8 @@ namespace SmoothRegen.Tests
         }
 
         // A lump that is not a whole number still pays out in full: the rest comes as one last step.
-        private static void PayoutFlushesTheFractionalRest()
+        [Fact]
+        public void PayoutFlushesTheFractionalRest()
         {
             var buffer = new RegenBuffer(boundToOneTick: false);
             var payout = new WholeHpPayout();
@@ -176,7 +154,8 @@ namespace SmoothRegen.Tests
         }
 
         // A single 20 hp tick, drained frame by frame, must total 20 hp.
-        private static void PaysOutExactlyWhatWentIn()
+        [Fact]
+        public void PaysOutExactlyWhatWentIn()
         {
             var buffer = new RegenBuffer();
             buffer.Add(20f, 10f);
@@ -188,7 +167,8 @@ namespace SmoothRegen.Tests
         }
 
         // Half the window elapsed should pay out roughly half, not everything.
-        private static void PaysOutOverTheWindowNotInstantly()
+        [Fact]
+        public void PaysOutOverTheWindowNotInstantly()
         {
             var buffer = new RegenBuffer();
             buffer.Add(10f, 10f);
@@ -200,7 +180,8 @@ namespace SmoothRegen.Tests
         }
 
         // A frame longer than the whole window must not hand out more than is held.
-        private static void NeverOverdraws()
+        [Fact]
+        public void NeverOverdraws()
         {
             var buffer = new RegenBuffer();
             buffer.Add(7f, 10f);
@@ -214,7 +195,8 @@ namespace SmoothRegen.Tests
 
         // A window is clamped to the 10s tick period, so a tick can only land on an undrained one
         // when payouts were held back. The remainder must not be stranded, and the total must survive.
-        private static void OverlappingTicksKeepTotal()
+        [Fact]
+        public void OverlappingTicksKeepTotal()
         {
             var buffer = new RegenBuffer();
             var total = 0f;
@@ -229,7 +211,8 @@ namespace SmoothRegen.Tests
             Near("drained", buffer.Pending, 0f);
         }
 
-        private static void IgnoresNonPositiveInput()
+        [Fact]
+        public void IgnoresNonPositiveInput()
         {
             var buffer = new RegenBuffer();
             buffer.Add(0f, 10f);
@@ -249,7 +232,8 @@ namespace SmoothRegen.Tests
             }
         }
 
-        private static void ClearDropsPending()
+        [Fact]
+        public void ClearDropsPending()
         {
             var buffer = new RegenBuffer();
             buffer.Add(50f, 10f);
@@ -261,7 +245,8 @@ namespace SmoothRegen.Tests
 
         // InstantFraction splits the lump. Whatever the split, the player must receive
         // exactly the amount the game produced - this mirrors HealPatch's arithmetic.
-        private static void SplitTickStillTotalsTheOriginal()
+        [Fact]
+        public void SplitTickStillTotalsTheOriginal()
         {
             foreach (var fraction in new[] { 0f, 0.25f, 1f })
             {
@@ -281,7 +266,8 @@ namespace SmoothRegen.Tests
         // Ticks banked while at full health must not grow without bound. The ceiling is one vanilla
         // tick, whatever the configured window: the window is clamped to the 10s tick period, so
         // pending / window never exceeds vanilla's own average rate.
-        private static void CapLimitsWhatIsBanked()
+        [Fact]
+        public void CapLimitsWhatIsBanked()
         {
             var short10 = new RegenBuffer();
             for (var i = 0; i < 20; i++) short10.Add(20f, 10f);
@@ -299,7 +285,8 @@ namespace SmoothRegen.Tests
         // Regression guard for b2f8500: however long the player idles, the buffer must never
         // swell into a bank that dumps the instant damage opens headroom - a hit that heals
         // straight back off. Ten minutes of ticks may leave at most one tick pending.
-        private static void FullHealthDoesNotBankABurst()
+        [Fact]
+        public void FullHealthDoesNotBankABurst()
         {
             const float dt = 1f / 50f;   // Player.UpdateStats(float) runs from FixedUpdate
             const float tick = 15f;      // one food regen tick
@@ -324,7 +311,8 @@ namespace SmoothRegen.Tests
         // Switching the mod off mid-window strands whatever is still owed, and the amount AND the
         // rate survive: switching it back on later resumed paying a heal earned minutes ago.
         // UpdateStatsPatch now clears the buffer on its disabled early return.
-        private static void DisableThenReenablePaysNothingStale()
+        [Fact]
+        public void DisableThenReenablePaysNothingStale()
         {
             const float dt = 1f / 50f;
             var buffer = new RegenBuffer();
@@ -347,7 +335,8 @@ namespace SmoothRegen.Tests
         // topping off before a fight healed strictly less than playing with no mod at all.
         // UpdateStatsPatch now returns before Take when there is no headroom; the cap in Add is
         // what keeps that hold from becoming a burst.
-        private static void FullHealthThenDamageStillPaysTheWholeTick()
+        [Fact]
+        public void FullHealthThenDamageStillPaysTheWholeTick()
         {
             const float dt = 1f / 50f;
             const float tick = 15f;
@@ -376,7 +365,8 @@ namespace SmoothRegen.Tests
         // tick far past the window it was promised in. Add now clamps the window to the tick period,
         // so ticks never overlap: at most one tick is ever in flight and each one is fully paid
         // before the next arrives.
-        private static void LongWindowStillPaysEachTickWithinTheTickPeriod()
+        [Fact]
+        public void LongWindowStillPaysEachTickWithinTheTickPeriod()
         {
             const float dt = 1f / 50f;
             const float tick = 20f;
@@ -407,7 +397,8 @@ namespace SmoothRegen.Tests
         // The ceiling is "one vanilla tick", not "the last tick". Food burns down, so the next tick
         // can be smaller than the one still held at full health; clamping to the incoming amount
         // threw the difference away and healed less than vanilla would have.
-        private static void ASmallerTickDoesNotTruncateWhatIsAlreadyHeld()
+        [Fact]
+        public void ASmallerTickDoesNotTruncateWhatIsAlreadyHeld()
         {
             var buffer = new RegenBuffer();
 
@@ -431,7 +422,8 @@ namespace SmoothRegen.Tests
         // Status-effect heals share one buffer, so two healing meads ticking in the same frame must
         // both be paid in full: the one-tick ceiling that guards the food buffer would forfeit the
         // smaller of the two.
-        private static void UnboundBufferKeepsConcurrentEffectsWhole()
+        [Fact]
+        public void UnboundBufferKeepsConcurrentEffectsWhole()
         {
             var buffer = new RegenBuffer(boundToOneTick: false);
             buffer.Add(25f, 5f);
@@ -443,7 +435,8 @@ namespace SmoothRegen.Tests
 
         // An effect whose interval is longer than the food tick period is paid out over that
         // interval, not squeezed into 10s: the clamp belongs to the food buffer alone.
-        private static void UnboundBufferTakesAWindowLongerThanATick()
+        [Fact]
+        public void UnboundBufferTakesAWindowLongerThanATick()
         {
             var buffer = new RegenBuffer(boundToOneTick: false);
             buffer.Add(30f, 30f);
@@ -454,7 +447,8 @@ namespace SmoothRegen.Tests
             Near("the rest paid by the end", DrainSeconds(buffer, seconds: 20f, dt: 1f / 60f), 20f, 0.05f);
         }
 
-        private static void RandomChurnKeepsEveryInvariant()
+        [Fact]
+        public void RandomChurnKeepsEveryInvariant()
         {
             const uint seed = 20260910u;
             const int steps = 4000;
@@ -553,7 +547,8 @@ namespace SmoothRegen.Tests
 
         // A burn: 5 vanilla ticks of 3.7 hp, one per second (SE_Burning, m_damageInterval 1). Each
         // tick's loss is banked over the interval and paid as -1 hp steps; the total is vanilla's.
-        private static void BurnTicksDrainAsWholeHpStepsAndTotalVanilla()
+        [Fact]
+        public void BurnTicksDrainAsWholeHpStepsAndTotalVanilla()
         {
             var dot = new PortionBuffer();
             var payout = new WholeHpPayout();
@@ -587,7 +582,8 @@ namespace SmoothRegen.Tests
         }
 
         // A mead heals 2 hp/s while a burn takes 5 hp/s: the bar must only go down, 3 hp/s.
-        private static void RegenAndDotNetIntoOneRate()
+        [Fact]
+        public void RegenAndDotNetIntoOneRate()
         {
             var payout = new WholeHpPayout();
             const float dt = 0.02f;
@@ -603,7 +599,8 @@ namespace SmoothRegen.Tests
             Near("net regen - dot over 3 s", net, -9f, 0.01f);
         }
 
-        private static void LethalDotTickLandsAtOnce()
+        [Fact]
+        public void LethalDotTickLandsAtOnce()
         {
             // 10 hp, 4 owed, a 3 hp tick: vanilla is at 3, survives -> defer.
             if (RegenMath.LethalDotHealth(10f, 4f, 3f, false).HasValue) Fail("non-lethal DoT tick was not deferred");
@@ -617,7 +614,8 @@ namespace SmoothRegen.Tests
             else Near("god-mode DoT health", god.Value, 1f);
         }
 
-        private static void DebtSettlesWithoutTouchingHealCarry()
+        [Fact]
+        public void DebtSettlesWithoutTouchingHealCarry()
         {
             var payout = new WholeHpPayout();
             payout.Pay(-0.6f, false);
@@ -631,7 +629,8 @@ namespace SmoothRegen.Tests
 
         // GuiBar.SetValue restarts the trail delay on every smooth drain (GuiBar.cs:73-76); -1 hp steps
         // must not, or the trail freezes for the whole burn. A real hit (not DoT) keeps the delay.
-        private static void HealthBarTrailFollowsDotDrain()
+        [Fact]
+        public void HealthBarTrailFollowsDotDrain()
         {
             if (!RegenMath.BarSkipsDelay(false, 50f, 49f, true)) Fail("DoT drain restarted the bar delay");
             if (RegenMath.BarSkipsDelay(false, 50f, 30f, false)) Fail("a real hit skipped the bar delay");
@@ -641,7 +640,8 @@ namespace SmoothRegen.Tests
 
         // Two 10 hp ticks 0.5 s apart, 1 s window each: the first is fully paid by t = 1 s, the second by 1.5 s.
         // A merged pool re-spread at 0.5 s would still owe part of the first at its deadline.
-        private static void OverlappingDotTicksKeepTheirDeadlines()
+        [Fact]
+        public void OverlappingDotTicksKeepTheirDeadlines()
         {
             var dot = new PortionBuffer();
             const float dt = 0.01f;
@@ -664,7 +664,8 @@ namespace SmoothRegen.Tests
             Near("left after forgive", dot.Pending, 2f);
         }
 
-        private static void ClampsTakeOnlyWhatVanillaWouldNotHaveLost()
+        [Fact]
+        public void ClampsTakeOnlyWhatVanillaWouldNotHaveLost()
         {
             // 100 hp, 10 owed (vanilla at 90), max drops to 95: vanilla keeps 90, we drop to 95 -> owe 5.
             Near("cap above vanilla", RegenMath.OwedAfterCap(100f, 10f, 95f), 5f);
@@ -699,8 +700,7 @@ namespace SmoothRegen.Tests
 
         private static void Fail(string message)
         {
-            Console.WriteLine("FAIL: " + message);
-            _failures++;
+            Failures.Add("FAIL: " + message);
         }
     }
 }

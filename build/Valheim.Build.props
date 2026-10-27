@@ -17,13 +17,14 @@
         TargetFramework stays in each csproj (plugins: net472).
       plugin (csproj sets <ValheimPlugin>true</ValheimPlugin>): game BepInEx/0Harmony refs,
         optional Jotunn and publicizer.
+      tests (csproj sets <ValheimTests>true</ValheimTests>): xUnit v3 on Microsoft Testing Platform.
     Opt-in switches are read only by item conditions; items are evaluated after every property of
     the project (csproj included), so a switch set in the csproj body is honoured here.
     Per-repo on purpose (not set here): Nullable, TreatWarningsAsErrors, NoWarn, Version, analyzers.
   -->
 
   <PropertyGroup>
-    <ValheimBuildVersion>2</ValheimBuildVersion>
+    <ValheimBuildVersion>3</ValheimBuildVersion>
   </PropertyGroup>
 
   <!-- ===== common ===== -->
@@ -101,5 +102,16 @@
        their own package and leave this off. -->
   <ItemGroup Condition="'$(ValheimPlugin)' == 'true' And '$(ValheimUsePublicizer)' == 'true'">
     <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.3" PrivateAssets="all" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <!-- ===== tests layer (csproj: <ValheimTests>true</ValheimTests>) =====
+       xunit.v3 4.x runs on Microsoft Testing Platform v2 only (MTP v1 support removed in 4.0.0); the
+       canonical global.json selects MTP for `dotnet test` (SDK 10: "test": {"runner": ...}), so no
+       xunit.runner.visualstudio / Microsoft.NET.Test.Sdk (VSTest is refused by MTP on SDK 10).
+       The test csproj also sets <OutputType>Exe</OutputType> and <IsTestProject>true</IsTestProject>
+       itself: properties here are evaluated before the csproj body, and quality-gate keys its
+       `dotnet test` phase on IsTestProject. Run from the repo root: dotnet test with its project option set to the X.Tests folder (README). -->
+  <ItemGroup Condition="'$(ValheimTests)' == 'true'">
+    <PackageReference Include="xunit.v3" Version="4.0.2" />
   </ItemGroup>
 </Project>
