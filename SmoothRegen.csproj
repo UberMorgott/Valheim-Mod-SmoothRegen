@@ -48,4 +48,20 @@
     </Reference>
   </ItemGroup>
 
+  <!-- <Version> is the single source of truth; every copy below must match or the build fails. -->
+  <Target Name="CheckVersionSync" BeforeTargets="CoreCompile">
+    <PropertyGroup>
+      <_VsFile1>$(MSBuildProjectDirectory)\manifest.json</_VsFile1>
+      <_VsNeedle1>&quot;version_number&quot;: &quot;$(Version)&quot;</_VsNeedle1>
+      <_VsText1>$([System.IO.File]::ReadAllText('$(_VsFile1)'))</_VsText1>
+      <_VsFile2>$(MSBuildProjectDirectory)\Plugin.cs</_VsFile2>
+      <_VsNeedle2>PluginVersion = &quot;$(Version)&quot;</_VsNeedle2>
+      <_VsText2>$([System.IO.File]::ReadAllText('$(_VsFile2)'))</_VsText2>
+    </PropertyGroup>
+    <Error Condition="'$(_VsText1.Contains($(_VsNeedle1)))' != 'true'"
+           Text="manifest.json does not carry &lt;Version&gt; $(Version) of SmoothRegen.csproj (expected: $(_VsNeedle1))." />
+    <Error Condition="'$(_VsText2.Contains($(_VsNeedle2)))' != 'true'"
+           Text="Plugin.cs does not carry &lt;Version&gt; $(Version) of SmoothRegen.csproj (expected: $(_VsNeedle2))." />
+  </Target>
+
 </Project>
