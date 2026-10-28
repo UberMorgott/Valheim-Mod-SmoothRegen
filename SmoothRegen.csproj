@@ -8,7 +8,7 @@
     <ValheimUsePublicizer>true</ValheimUsePublicizer>
     <AssemblyName>SmoothRegen</AssemblyName>
     <Product>SmoothRegen</Product>
-    <Version>1.1.3</Version>
+    <Version>1.1.4</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- Valheim ships its own copies; never emit ours next to the plugin. -->
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
